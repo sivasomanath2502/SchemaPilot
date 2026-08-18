@@ -113,6 +113,9 @@ def run_schema_agent_validated(requirement: dict, selection: dict) -> dict:
         "indexes": [i.model_dump() for i in schema.indexes],
         "transaction_strategy": schema.transaction_strategy,
         "important_queries": [q.model_dump() for q in schema.important_queries],
+        "constraints": [c.model_dump() for c in schema.constraints],
+        "state_fields": schema.state_fields,
+        "audit_fields": schema.audit_fields,
         "validation": {
             "final_valid": validation["final_valid"],
             "attempts": validation["attempts"],

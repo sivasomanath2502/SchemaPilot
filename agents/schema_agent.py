@@ -1,22 +1,36 @@
 """
-Phase 8: Schema Design Agent.
+Phase 8 + Phase I: Schema Design Agent.
 
-Split into two smaller calls rather than one large one — testing showed
+Split into two smaller calls rather than one large one -- testing showed
 qwen3:4b gets confused and echoes input fields back when asked for a single
 large, deeply-nested schema. Two focused calls, each comparable in
 complexity to the working Selection Agent schema, are more reliable.
 
 Call 1: entities, relationships, transaction_strategy (conceptual design)
-Call 2: sql_ddl, indexes, important_queries (concrete SQL, built on call 1)
+Call 2: sql_ddl, indexes, important_queries, constraints, state_fields,
+        audit_fields (concrete SQL, built on call 1)
 
-No RAG here, per the proposal's architecture (Section 21) — only Agent 2
+Phase I adds "constraints" (structured unique/check/foreign_key/not_null
+list), "state_fields" (status/enum-style columns), and "audit_fields"
+(timestamps/history columns) as their OWN structured fields rather than
+leaving them buried in freehand DDL text. This is what lets the ER-diagram
+generator and the eventual report synthesis read them deterministically
+instead of re-parsing SQL text. They come from the SAME call that writes
+the DDL (not a separate freehand claim), for the same reason the Review
+Agent checks DDL instead of trusting claims about it -- these fields
+describe what the model just wrote, not a wishlist. The Review Agent
+(Phase J) should still cross-check that each declared constraint actually
+appears in the DDL, the same way it already checks the critical invariant.
+
+No RAG here, per the proposal's architecture (Section 21) -- only Agent 2
 (Selection) consumes FAISS/RAG directly.
 
 UPDATE: added retry-on-validation-error (not just JSON-parse-error), and
 a "salvage" repair step for list items where qwen3:4b drops or mis-names a
-required key on the 2nd+ item in an array — a known small-model failure
-mode. Applied to entities, relationships, indexes, and important_queries,
-since all four are arrays the model has to repeat structure across.
+required key on the 2nd+ item in an array -- a known small-model failure
+mode. Applied to entities, relationships, indexes, important_queries, and
+now constraints, since all five are arrays the model has to repeat
+structure across.
 """
 
 import json
@@ -84,11 +98,20 @@ markdown fences, nothing else:
   ],
   "important_queries": [
     {"description": "<what this query does>", "sql": "<the SQL query>"}
+  ],
+  "constraints": [
+    {"type": "<unique|check|foreign_key|not_null>", "table": "<table name>", "columns": ["<col1>"], "description": "<what business rule this enforces and why>"}
+  ],
+  "state_fields": [
+    "<table.column: purpose and possible values, e.g. 'bookings.status: pending/confirmed/cancelled'>"
+  ],
+  "audit_fields": [
+    "<table.column: purpose, e.g. 'bookings.created_at: booking creation time for audit/history'>"
   ]
 }
 
-Example output shape (follow this exact structure for EVERY index and EVERY
-query, including the 2nd, 3rd, etc. — do not drop keys on later items):
+Example output shape (follow this exact structure for EVERY item in EVERY
+array, including the 2nd, 3rd, etc. — do not drop keys on later items):
 {
   "sql_ddl": "CREATE TABLE users (...);\\nCREATE TABLE bookings (...);",
   "indexes": [
@@ -98,12 +121,31 @@ query, including the 2nd, 3rd, etc. — do not drop keys on later items):
   "important_queries": [
     {"description": "Get a user's booking history", "sql": "SELECT * FROM bookings WHERE user_id = ? ORDER BY created_at DESC;"},
     {"description": "Check if a seat is already booked", "sql": "SELECT * FROM bookings WHERE seat_id = ? AND status = 'confirmed';"}
+  ],
+  "constraints": [
+    {"type": "unique", "table": "bookings", "columns": ["seat_id", "show_id"], "description": "Prevents the same seat from being booked twice for the same show."},
+    {"type": "foreign_key", "table": "bookings", "columns": ["user_id"], "description": "Every booking must belong to a real user."}
+  ],
+  "state_fields": [
+    "bookings.status: pending/confirmed/cancelled — tracks booking lifecycle"
+  ],
+  "audit_fields": [
+    "bookings.created_at: when the booking was made, for history and support queries"
   ]
 }
 
 Every index object MUST have "table", "columns", and "reason" keys.
 Every important_queries object MUST have "description" and "sql" keys.
+Every constraints object MUST have "type", "table", "columns", and "description" keys.
 Never omit a key on any array item, no matter how many items there are.
+
+Every constraint listed in "constraints" MUST actually appear in "sql_ddl" —
+do not describe a constraint you did not write into the DDL. state_fields and
+audit_fields must reference columns that actually exist in "sql_ddl".
+
+Include at least the primary key constraint implied by the critical invariant
+(if one is given) as an entry in "constraints" with type "unique" or
+"check" as appropriate, in addition to any other constraints needed.
 
 Do NOT repeat or copy the input entity list into your output as-is — use it to
 write real SQL. Output ONLY the JSON object described above.
@@ -136,6 +178,13 @@ class ImportantQuery(BaseModel):
     sql: str
 
 
+class Constraint(BaseModel):
+    type: str
+    table: str
+    columns: list[str]
+    description: str
+
+
 class ConceptualOutput(BaseModel):
     entities: list[Entity]
     relationships: list[Relationship] = Field(default_factory=list)
@@ -146,6 +195,9 @@ class SqlOutput(BaseModel):
     sql_ddl: str
     indexes: list[Index] = Field(default_factory=list)
     important_queries: list[ImportantQuery] = Field(default_factory=list)
+    constraints: list[Constraint] = Field(default_factory=list)
+    state_fields: list[str] = Field(default_factory=list)
+    audit_fields: list[str] = Field(default_factory=list)
 
 
 class SchemaOutput(BaseModel):
@@ -155,6 +207,9 @@ class SchemaOutput(BaseModel):
     indexes: list[Index] = Field(default_factory=list)
     transaction_strategy: str
     important_queries: list[ImportantQuery] = Field(default_factory=list)
+    constraints: list[Constraint] = Field(default_factory=list)
+    state_fields: list[str] = Field(default_factory=list)
+    audit_fields: list[str] = Field(default_factory=list)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -237,6 +292,8 @@ def _repair_and_validate(raw: dict, model_cls):
         _salvage_list_items(raw["indexes"], ["table", "columns", "reason"], "indexes")
     if "important_queries" in raw and isinstance(raw["important_queries"], list):
         _salvage_list_items(raw["important_queries"], ["description", "sql"], "important_queries")
+    if "constraints" in raw and isinstance(raw["constraints"], list):
+        _salvage_list_items(raw["constraints"], ["type", "table", "columns", "description"], "constraints")
     return model_cls(**raw)
 
 
@@ -257,7 +314,7 @@ def _call_llm(system_prompt: str, user_message: str, label: str, max_retries: in
             ],
             think=False,
             format="json",
-            options={"temperature": 0, "num_predict": 900},
+            options={"temperature": 0, "num_predict": 1200},
         )
         elapsed = time.time() - start
         raw = _strip_code_fences(response["message"]["content"])
@@ -302,7 +359,7 @@ def run_schema_agent(requirement: dict, selection: dict) -> SchemaOutput:
         CONCEPTUAL_SYSTEM_PROMPT, prose, "conceptual", ConceptualOutput
     )
 
-    print("  Step 2/2: SQL schema (DDL, indexes, queries)...")
+    print("  Step 2/2: SQL schema (DDL, indexes, queries, constraints)...")
     entity_list = ", ".join(f"{e.name} ({e.description})" for e in conceptual.entities)
     rel_list = "; ".join(
         f"{r.from_} -> {r.to} ({r.type}: {r.description})" for r in conceptual.relationships
@@ -324,6 +381,9 @@ def run_schema_agent(requirement: dict, selection: dict) -> SchemaOutput:
         sql_ddl=sql_part.sql_ddl,
         indexes=sql_part.indexes,
         important_queries=sql_part.important_queries,
+        constraints=sql_part.constraints,
+        state_fields=sql_part.state_fields,
+        audit_fields=sql_part.audit_fields,
     )
 
 
