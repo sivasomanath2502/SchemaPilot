@@ -72,7 +72,7 @@ def schema_step(state: GraphState) -> dict:
 
 def review_step(state: GraphState) -> dict:
     print(f"\n=== Review Agent (cycle {state['cycle_count']}) ===")
-    result = run_review_agent(state["requirement"], state["schema"])
+    result = run_review_agent(state["requirement"], state["selection"], state["schema"])
     return {"review": result.model_dump()}
 
 
