@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
 from langgraph.graph import StateGraph, END
 
-from requirement_agent import run_requirement_agent
+from requirement_agent import run_requirement_agent_full
 from selection_agent import run_selection_agent
 from schema_agent_validated import run_schema_agent_validated
 from review_agent import run_review_agent
@@ -54,8 +54,8 @@ class GraphState(TypedDict):
 
 def requirement_step(state: GraphState) -> dict:
     print("\n=== Requirement Agent ===")
-    result = run_requirement_agent(state["user_input"])
-    return {"requirement": result.model_dump()}
+    result = run_requirement_agent_full(state["user_input"])
+    return {"requirement": result}
 
 
 def selection_step(state: GraphState) -> dict:
