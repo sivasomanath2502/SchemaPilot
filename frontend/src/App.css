@@ -1,0 +1,415 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --paper: #eef2f7;
+  --paper-line: #c9d6e8;
+  --ink: #16233d;
+  --ink-soft: #445b7c;
+  --blueprint: #1c3f6e;
+  --blueprint-deep: #0f2648;
+  --amber: #d98e2c;
+  --ok: #2a7a5f;
+  --warn: #b8562c;
+  --critical: #b8342c;
+  --font-display: 'IBM Plex Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--paper-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--paper-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--ink);
+  font-family: var(--font-display);
+}
+
+.app {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 48px 24px 96px;
+}
+
+.app-header {
+  margin-bottom: 40px;
+}
+
+.eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--blueprint);
+  margin-bottom: 6px;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0;
+  color: var(--blueprint-deep);
+  letter-spacing: -0.01em;
+}
+
+.input-section, .status-section, .results-section {
+  background: #fff;
+  border: 1px solid var(--paper-line);
+  border-radius: 4px;
+  padding: 32px;
+  box-shadow: 0 1px 3px rgba(22, 35, 61, 0.06);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--ink);
+}
+
+textarea {
+  width: 100%;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  padding: 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 3px;
+  resize: vertical;
+  color: var(--ink);
+  background: #fbfcfe;
+}
+
+textarea:focus, button:focus-visible {
+  outline: 2px solid var(--blueprint);
+  outline-offset: 1px;
+}
+
+button {
+  margin-top: 16px;
+  background: var(--blueprint);
+  color: #fff;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 3px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #9aa9c0;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--blueprint);
+  border: 1px solid var(--blueprint);
+  margin-top: 0;
+}
+
+.status-section {
+  margin-top: 24px;
+  text-align: center;
+}
+
+.status-line {
+  margin-top: 20px;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--paper-line);
+  border-top-color: var(--blueprint);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
+.error-section p {
+  color: var(--critical);
+}
+
+/* pipeline */
+.pipeline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.pipeline-stage {
+  display: flex;
+  align-items: center;
+}
+
+.pipeline-node {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--blueprint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: var(--blueprint);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  position: relative;
+}
+
+.pipeline-node.active {
+  background: var(--blueprint);
+  color: #fff;
+}
+
+.pipeline-label {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  margin: 0 8px 0 8px;
+  white-space: nowrap;
+}
+
+.pipeline-connector {
+  width: 32px;
+  height: 2px;
+  background: var(--paper-line);
+}
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--paper-line);
+  margin-bottom: 24px;
+}
+
+.tab-bar button {
+  background: none;
+  color: var(--ink-soft);
+  margin-top: 0;
+  border-radius: 0;
+  padding: 10px 16px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab-bar button.tab-active {
+  color: var(--blueprint-deep);
+  border-bottom: 2px solid var(--blueprint);
+}
+
+.tab-panel h4 {
+  color: var(--blueprint-deep);
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 28px 0 12px;
+}
+
+.tab-panel h4:first-child { margin-top: 0; }
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 20px;
+  margin: 0;
+}
+
+.kv-grid dt {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.kv-grid dd {
+  margin: 0;
+  font-weight: 500;
+}
+
+.kv-grid dd.highlight {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  background: #e4ecf7;
+  color: var(--blueprint-deep);
+  padding: 5px 12px;
+  border-radius: 14px;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+.recommendation-card {
+  background: #f4f8ff;
+  border-left: 3px solid var(--blueprint);
+  padding: 20px 24px;
+  border-radius: 3px;
+}
+
+.recommendation-card h3 {
+  margin: 4px 0 10px;
+  color: var(--blueprint-deep);
+  font-size: 1.4rem;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.data-table th {
+  text-align: left;
+  color: var(--ink-soft);
+  font-weight: 600;
+  border-bottom: 1px solid var(--paper-line);
+  padding: 8px 12px 8px 0;
+}
+
+.data-table td {
+  padding: 10px 12px 10px 0;
+  border-bottom: 1px solid #f0f3f8;
+  vertical-align: top;
+}
+
+.mono { font-family: var(--font-mono); font-size: 0.88em; }
+
+.reasoning-item {
+  border-left: 2px solid var(--paper-line);
+  padding-left: 16px;
+  margin-bottom: 14px;
+}
+
+.reasoning-rejected { border-left-color: var(--critical); opacity: 0.85; }
+
+.relationship-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.relationship-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f3f8;
+  font-size: 0.9rem;
+}
+
+.rel-type {
+  margin-left: 10px;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.code-block {
+  background: var(--blueprint-deep);
+  color: #dce6f5;
+  padding: 18px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.code-block.small { font-size: 0.8rem; padding: 12px 16px; }
+
+.query-item { margin-bottom: 16px; }
+
+.query-desc {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+
+.badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.badge-critical { background: #fbe3e0; color: var(--critical); }
+.badge-warning { background: #fbeadb; color: var(--warn); }
+.badge-suggestion { background: #e4ecf7; color: var(--blueprint-deep); }
+.badge-ok { background: #dff2ea; color: var(--ok); }
+
+.cycle-note {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.assessment-card {
+  padding: 16px 20px;
+  border-radius: 3px;
+  margin-bottom: 20px;
+}
+
+.assessment-ok { background: #eaf7f1; border-left: 3px solid var(--ok); }
+.assessment-warn { background: #fdf1ea; border-left: 3px solid var(--warn); }
+
+.issue-card {
+  border: 1px solid var(--paper-line);
+  border-radius: 4px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+}
+
+.issue-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.issue-category {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+}
+
+.suggested-fix {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.no-issues {
+  color: var(--ok);
+  font-weight: 500;
+}
