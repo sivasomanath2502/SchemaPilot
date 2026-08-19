@@ -1,7 +1,5 @@
 """
-Phase 13: LangGraph orchestration.
-
-Wires all four agents into the workflow from the proposal's Section 10:
+Phase 13 + Phase K/L/M: LangGraph orchestration.
 
   START -> Requirement -> Selection -> Schema (+MySQL validate/fix) -> Review
                                                                           |
@@ -9,17 +7,13 @@ Wires all four agents into the workflow from the proposal's Section 10:
                                                                      /      \
                                                                    YES       NO
                                                                     |         |
-                                                                 Improve     END
+                                                                 Improve   ER Diagram -> Report -> END
                                                                     |
                                                                  (back to Review)
 
-Loops at most 2 times (MAX_REVIEW_CYCLES) before stopping and reporting
+Loops at most 2 times (MAX_REVIEW_CYCLES) before finalizing and reporting
 remaining issues honestly, rather than looping forever on an issue the
 model can't resolve.
-
-Node names are suffixed with _step because LangGraph rejects a node name
-identical to a state field name (e.g. a node called "requirement" collides
-with the "requirement" key in GraphState).
 """
 
 import json
@@ -34,11 +28,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
 from langgraph.graph import StateGraph, END
 
-from requirement_agent import run_requirement_agent_full
+from requirement_agent import run_requirement_agent
 from selection_agent import run_selection_agent
 from schema_agent_validated import run_schema_agent_validated
 from review_agent import run_review_agent
 from improve_agent import run_improve_step
+from er_diagram_agent import run_er_diagram_agent
+from report_agent import run_report_agent
 
 MAX_REVIEW_CYCLES = 2
 
@@ -50,12 +46,14 @@ class GraphState(TypedDict):
     schema: dict
     review: dict
     cycle_count: int
+    er_diagram: str
+    report: dict
 
 
 def requirement_step(state: GraphState) -> dict:
     print("\n=== Requirement Agent ===")
-    result = run_requirement_agent_full(state["user_input"])
-    return {"requirement": result}
+    result = run_requirement_agent(state["user_input"])
+    return {"requirement": result.model_dump()}
 
 
 def selection_step(state: GraphState) -> dict:
@@ -82,6 +80,19 @@ def improve_step(state: GraphState) -> dict:
     return {"schema": updated_schema, "cycle_count": state["cycle_count"] + 1}
 
 
+def er_diagram_step(state: GraphState) -> dict:
+    print("\n=== ER Diagram (deterministic, from validated DDL) ===")
+    return {"er_diagram": run_er_diagram_agent(state["schema"])}
+
+
+def report_step(state: GraphState) -> dict:
+    print("\n=== Final Report Synthesis ===")
+    return {"report": run_report_agent(
+        state["requirement"], state["selection"], state["schema"],
+        state["review"], state["er_diagram"],
+    )}
+
+
 def route_after_review(state: GraphState) -> str:
     critical_issues = [i for i in state["review"]["issues"] if i["severity"] == "critical"]
     if critical_issues and state["cycle_count"] < MAX_REVIEW_CYCLES:
@@ -90,10 +101,10 @@ def route_after_review(state: GraphState) -> str:
         return "improve"
     if critical_issues:
         print(f"  -> {len(critical_issues)} critical issue(s) remain but max cycles "
-              f"({MAX_REVIEW_CYCLES}) reached -- stopping and reporting honestly")
+              f"({MAX_REVIEW_CYCLES}) reached -- finalizing and reporting honestly")
     else:
-        print("  -> No critical issues, done")
-    return END
+        print("  -> No critical issues, finalizing")
+    return "finalize"
 
 
 def build_graph():
@@ -103,15 +114,20 @@ def build_graph():
     graph.add_node("schema_node", schema_step)
     graph.add_node("review_node", review_step)
     graph.add_node("improve_node", improve_step)
+    graph.add_node("er_diagram_node", er_diagram_step)
+    graph.add_node("report_node", report_step)
 
     graph.set_entry_point("requirement_node")
     graph.add_edge("requirement_node", "selection_node")
     graph.add_edge("selection_node", "schema_node")
     graph.add_edge("schema_node", "review_node")
     graph.add_conditional_edges(
-        "review_node", route_after_review, {"improve": "improve_node", END: END}
+        "review_node", route_after_review,
+        {"improve": "improve_node", "finalize": "er_diagram_node"},
     )
     graph.add_edge("improve_node", "review_node")
+    graph.add_edge("er_diagram_node", "report_node")
+    graph.add_edge("report_node", END)
 
     return graph.compile()
 
@@ -132,6 +148,8 @@ if __name__ == "__main__":
         "schema": {},
         "review": {},
         "cycle_count": 0,
+        "er_diagram": "",
+        "report": {},
     })
 
     print("\n\n=== FINAL RESULT ===")

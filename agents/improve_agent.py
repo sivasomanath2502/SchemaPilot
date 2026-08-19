@@ -32,6 +32,7 @@ Keep everything that wasn't flagged as an issue unchanged. Output ONLY the
 JSON object.
 """
 
+SCHEMA_ACTIONABLE_CATEGORIES = {"constraints", "indexes", "concurrency"}
 
 def apply_review_fixes(sql_ddl: str, indexes: list[dict], issues: list[dict]) -> dict:
     if not issues:
@@ -61,12 +62,14 @@ def apply_review_fixes(sql_ddl: str, indexes: list[dict], issues: list[dict]) ->
 
 @traceable(name="run_improve_step", run_type="tool")
 def run_improve_step(schema: dict, review: dict) -> dict:
-    """Applies review feedback, then re-runs the MySQL validate/fix loop
-    since the revision could introduce a new syntax error. Returns an
-    updated schema dict in the same shape as run_schema_agent_validated."""
-    actionable = [i for i in review["issues"] if i["severity"] in ("critical", "warning")]
+    actionable = [
+        i for i in review["issues"]
+        if i["severity"] in ("critical", "warning")
+        and i["category"] in SCHEMA_ACTIONABLE_CATEGORIES
+    ]
 
-    print(f"  Applying fixes for {len(actionable)} critical/warning issue(s)...")
+    print(f"  Applying fixes for {len(actionable)} schema-actionable critical/warning issue(s) "
+          f"(of {len(review['issues'])} total issues found)...")
     revised = apply_review_fixes(schema["sql_ddl"], schema["indexes"], actionable)
 
     print("  Re-validating revised DDL against MySQL...")
@@ -75,6 +78,21 @@ def run_improve_step(schema: dict, review: dict) -> dict:
     updated_schema = dict(schema)
     updated_schema["sql_ddl"] = validation["sql_ddl"]
     updated_schema["indexes"] = revised["indexes"]
+    from er_diagram_agent import parse_ddl
+    parsed_tables = parse_ddl(validation["sql_ddl"])
+    updated_schema["constraints"] = [
+        {"type": "primary_key", "table": t["table"], "columns": t["primary_key"],
+         "description": "auto-derived from revised DDL"}
+        for t in parsed_tables if t["primary_key"]
+    ] + [
+        {"type": "foreign_key", "table": t["table"], "columns": [fk["column"]],
+         "description": f"references {fk['ref_table']}({fk['ref_column']})"}
+        for t in parsed_tables for fk in t["foreign_keys"]
+    ] + [
+        {"type": "unique", "table": t["table"], "columns": uc,
+         "description": "auto-derived from revised DDL"}
+        for t in parsed_tables for uc in t["unique_constraints"]
+    ]
     updated_schema["validation"] = {
         "final_valid": validation["final_valid"],
         "attempts": validation["attempts"],

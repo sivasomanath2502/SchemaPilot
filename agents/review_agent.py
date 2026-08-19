@@ -32,18 +32,20 @@ import time
 from langsmith import traceable
 import ollama
 from pydantic import BaseModel, Field, ValidationError
+from pathlib import Path
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VECTORSTORE_DIR = PROJECT_ROOT / "vectorstore"
+EMBEDDING_MODEL = "qwen3-embedding:0.6b"
+CHUNKS_PER_QUERY = 3
+MAX_TOTAL_CHUNKS = 10
 MODEL_NAME = "qwen3:4b"
 
-# Fixed category taxonomy. Kept as a documented convention rather than a
-# strict Pydantic Literal -- earlier agents (requirement_agent, schema_agent)
-# showed qwen3:4b occasionally drifts on exact string matches, and a
-# ValidationError here would burn a retry over a label mismatch rather than
-# a real content problem. _normalize_category() below maps common drift
-# (case, near-synonyms) back onto the canonical set instead of rejecting it.
 CATEGORIES = [
-    "entities_relationships",  # missing entities, missing relationships, wrong cardinality
-    "constraints",              # missing/incorrect PK, FK, unique, check constraints
+    "entities_relationships",  
+    "constraints",              
     "indexes",                  # missing or badly chosen indexes
     "queries",                  # missing important queries, queries that don't use available indexes
     "concurrency",              # race conditions, unenforced critical invariant
@@ -143,6 +145,38 @@ name shown in brackets when you report an issue in that area.
   requirements? Flag overengineering explicitly -- this is as real a problem
   as a missing feature.
 
+[pagination]
+- Do list-returning important queries have a pagination strategy consistent
+  with pagination_requirements? Offset pagination on a large, frequently
+  changing table is usually wrong -- flag it if so.
+- If the CHOSEN ARCHITECTURE section states a specific pagination decision
+  (e.g. "keyset pagination"), check whether important_queries actually
+  implements it. A stated decision that the schema never implements is a
+  real issue -- category "pagination", typically "warning" severity.
+
+[idempotency]
+- Do operations named in idempotency_requirements actually have a mechanism
+  (idempotency key column, unique constraint, etc.) to be safely retried? Is
+  there ambiguity about what happens on a client timeout/retry?
+- If the idempotency decision claims a UNIQUE constraint enforces safety,
+  verify that exact constraint actually exists in the DDL with the exact
+  columns claimed -- don't take the claim at face value, check it the same
+  way you check the critical invariant in [concurrency].
+
+[replication] / [partitioning_sharding] / [caching] / [search]
+- Cross-check: is the stated decision's "reason"/"evidence" actually
+  supported by the requirement fields shown above, or does it contradict
+  them (e.g. a decision citing "read-heavy workload" when read_write_ratio
+  is "balanced")? A decision whose own stated evidence doesn't match the
+  requirements is an [architecture] issue, not a schema issue.
+
+[reliability]
+- Is there any handling for partial failure, backups, or recovery where the
+  requirements call for it (e.g. lifecycle_requirements, availability_requirement)?
+- Check the failure_handling decision above against this -- if it defers
+  something (e.g. "no multi-region failover") because availability_requirement
+  is unstated, that is a sound, non-critical decision; don't flag it as an
+  issue merely for choosing the simpler option under missing information.
 SEVERITY GUIDANCE:
 - "critical": the critical invariant is unenforced, data can be lost/
   corrupted, or a stated hard requirement is structurally violated.
@@ -223,11 +257,9 @@ def _normalize_category(raw_category: str) -> str:
     return synonyms.get(c, c if c else "architecture")
 
 
-def _design_to_prose(requirement: dict, selection: dict, schema: dict) -> str:
-    """Prose, not raw JSON -- avoids the model echoing input structure back,
-    same lesson learned in the Schema Agent (Phase 8). Phase J: now surfaces
-    constraints, the requirement's fuller field set, and the selection's
-    chosen architecture -- previously invisible to this agent."""
+# _design_to_prose -- extend "CHOSEN ARCHITECTURE" section
+
+def _design_to_prose(requirement: dict, selection: dict, schema: dict, retrieved_context: str) -> str:
     entities = ", ".join(e["name"] for e in schema.get("entities", []))
     relationships = "; ".join(
         f"{r['from']} -> {r['to']} ({r['type']})" for r in schema.get("relationships", [])
@@ -249,6 +281,16 @@ def _design_to_prose(requirement: dict, selection: dict, schema: dict) -> str:
         for c in selection.get("supporting_components", [])
     ) or "none"
 
+    decision_fields = [
+        "caching", "replication", "search", "partitioning", "sharding",
+        "pagination", "failure_handling", "idempotency", "consistency_strategy",
+    ]
+    decisions = "\n".join(
+        f"- {field}: {d['decision']} (reason: {d['reason']}; trade-off: {d['trade_off']})"
+        for field in decision_fields
+        if (d := selection.get(field))
+    ) or "none recorded"
+
     return (
         f"REQUIREMENTS\n"
         f"Critical invariant that MUST be enforced: {requirement.get('critical_invariant')}\n"
@@ -264,7 +306,10 @@ def _design_to_prose(requirement: dict, selection: dict, schema: dict) -> str:
         f"CHOSEN ARCHITECTURE\n"
         f"Primary database: {selection.get('primary_database', 'unspecified')}\n"
         f"Architecture summary: {selection.get('architecture_summary', 'unspecified')}\n"
-        f"Supporting components: {supporting}\n\n"
+        f"Supporting components: {supporting}\n"
+        f"Structured architectural decisions (Selection Agent's own stated reasoning "
+        f"-- check both whether each is internally justified AND whether the schema "
+        f"below actually implements it):\n{decisions}\n\n"
         f"SCHEMA\n"
         f"Entities: {entities}\n"
         f"Relationships: {relationships}\n"
@@ -272,13 +317,99 @@ def _design_to_prose(requirement: dict, selection: dict, schema: dict) -> str:
         f"Indexes defined: {indexes}\n"
         f"Transaction strategy claimed by the Schema Agent: {schema.get('transaction_strategy')}\n\n"
         f"Actual SQL DDL:\n{schema.get('sql_ddl')}\n\n"
-        f"Important queries:\n{queries}"
+        f"Important queries:\n{queries}\n\n"
+        f"RETRIEVED REFERENCE MATERIAL (verify your critique against this -- "
+        f"e.g. if a source states how a constraint should be structured to "
+        f"enforce an invariant, check the actual DDL against that source's "
+        f"stated pattern, not just your own reasoning):\n{retrieved_context}"
+    )
+def build_review_queries(requirement: dict, selection: dict) -> list[str]:
+    """Targeted retrieval per the spec's Section 21 Review Agent list:
+    transactions, concurrency, consistency, caching, replication,
+    partitioning, sharding, failure handling, idempotency, case studies.
+    Grounded in the ACTUAL invariant/decisions, not generic topic names --
+    same principle as selection_agent's build_queries."""
+    queries = []
+
+    if requirement.get("critical_invariant"):
+        queries.append(
+            f"how to enforce with a database constraint: {requirement['critical_invariant']}"
+        )
+    queries.append(
+        f"transaction isolation concurrency for {requirement.get('concurrency', '')} "
+        f"concurrency and {requirement.get('consistency', '')} consistency"
+    )
+
+    for field in ("caching", "replication", "partitioning", "sharding",
+                  "pagination", "idempotency", "failure_handling"):
+        d = selection.get(field)
+        if d and d.get("decision"):
+            queries.append(f"{field.replace('_', ' ')}: {d['decision']}")
+
+    queries.append(f"case study design for application: {requirement.get('application', '')}")
+
+    return queries
+
+
+def retrieve_review_context(requirement: dict, selection: dict) -> list:
+    embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
+    vectorstore = FAISS.load_local(
+        str(VECTORSTORE_DIR), embeddings, allow_dangerous_deserialization=True
+    )
+    queries = build_review_queries(requirement, selection)
+    seen, collected = set(), []
+    for q in queries:
+        for doc in vectorstore.similarity_search(q, k=CHUNKS_PER_QUERY):
+            key = (doc.metadata.get("source"), doc.page_content[:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(doc)
+            if len(collected) >= MAX_TOTAL_CHUNKS:
+                return collected
+    return collected
+
+
+def format_review_context(chunks: list) -> str:
+    parts = []
+    for doc in chunks:
+        parts.append(f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}")
+    return "\n\n---\n\n".join(parts)
+
+# review_agent.py
+
+def _synthesize_overall_assessment(issues: list[dict]) -> str:
+    """Fallback when the model structurally omits overall_assessment --
+    observed cause: folds the assessment sentence into the last issue's
+    suggested_fix instead of emitting the separate top-level key, once the
+    issues list has more than one entry. Deterministic at temperature=0, so
+    retrying without repair just reproduces the same omission every time.
+    This is a backfill, not a substitute for the model's own judgment --
+    logged clearly so a backfilled run is distinguishable from a real one."""
+    if not issues:
+        return "No issues found."
+    critical = [i for i in issues if i.get("severity") == "critical"]
+    if critical:
+        return (
+            f"{len(critical)} critical issue(s) found (auto-summarized -- "
+            f"the model omitted its own overall_assessment field): "
+            + "; ".join(i.get("description", "")[:120] for i in critical)
+        )
+    return (
+        f"{len(issues)} non-critical issue(s) found, no critical issues "
+        f"(auto-summarized -- the model omitted its own overall_assessment field)."
     )
 
 
 @traceable(name="review_agent", run_type="chain")
 def run_review_agent(requirement: dict, selection: dict, schema: dict, max_retries: int = 2) -> ReviewOutput:
-    user_message = _design_to_prose(requirement, selection, schema)
+    chunks = retrieve_review_context(requirement, selection)
+    print(f"  Retrieved {len(chunks)} unique chunks for review grounding")
+    for doc in chunks:
+        print(f"    - {doc.metadata.get('source')}")
+    retrieved_context = format_review_context(chunks)
+
+    user_message = _design_to_prose(requirement, selection, schema, retrieved_context)
 
     last_error = None
     for attempt in range(1, max_retries + 2):
@@ -291,8 +422,6 @@ def run_review_agent(requirement: dict, selection: dict, schema: dict, max_retri
             ],
             think=False,
             format="json",
-            # Bumped from 900 -- the expanded 14-category checklist can
-            # legitimately surface more issues than the old 5-category one.
             options={"temperature": 0, "num_predict": 1400},
         )
         elapsed = time.time() - start
@@ -304,6 +433,9 @@ def run_review_agent(requirement: dict, selection: dict, schema: dict, max_retri
             data = json.loads(raw)
             for issue in data.get("issues", []):
                 issue["category"] = _normalize_category(issue.get("category", ""))
+            if not data.get("overall_assessment"):
+                print("  [attempt {}] model omitted overall_assessment -- backfilling from issues".format(attempt))
+                data["overall_assessment"] = _synthesize_overall_assessment(data.get("issues", []))
             return ReviewOutput(**data)
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
@@ -313,11 +445,7 @@ def run_review_agent(requirement: dict, selection: dict, schema: dict, max_retri
 
     raise RuntimeError(f"Review Agent failed after {max_retries + 1} attempts. Last error: {last_error}")
 
-
 if __name__ == "__main__":
-    # Using the ACTUAL output from the real Phase 11 run -- including the
-    # known bug (claimed uniqueness constraint that doesn't exist in the DDL)
-    # as a real test of whether this agent catches it.
     example_requirement = {
         "application": "TicketBooking",
         "critical_invariant": "A seat cannot be booked more than once.",
