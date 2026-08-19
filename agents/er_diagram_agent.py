@@ -12,7 +12,7 @@ and SQL" (spec Section 5).
 """
 
 import re
-
+from langsmith import traceable
 
 def _parse_create_table(stmt: str) -> dict | None:
     m = re.search(r"CREATE TABLE\s+(\w+)\s*\((.*)\)\s*;?\s*$", stmt, re.S | re.I)
@@ -103,7 +103,7 @@ def generate_mermaid_er(sql_ddl: str) -> str:
 
     return "\n".join(lines)
 
-
+@traceable(name="er_diagram_agent", run_type="tool")
 def run_er_diagram_agent(schema: dict) -> str:
     sql_ddl = schema.get("sql_ddl", "")
     if not sql_ddl:

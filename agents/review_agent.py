@@ -89,11 +89,34 @@ name shown in brackets when you report an issue in that area.
 [concurrency]
 - THE MOST IMPORTANT CHECK: does the SQL DDL actually enforce the stated
   critical invariant via a real UNIQUE constraint or equivalent mechanism --
-  not just whether transaction_strategy text CLAIMS it does. Check this
-  specifically before anything else, and if the invariant is claimed but not
-  actually enforced in the DDL, this is ALWAYS a "critical" severity issue.
+  not just whether transaction_strategy text CLAIMS it does. If the retrieved
+  reference material describes the correct constraint pattern for this kind
+  of invariant, check the actual DDL against that pattern specifically.
+- A UNIQUE constraint covering exactly the right columns is, BY ITSELF,
+  SUFFICIENT to enforce a "no two rows with the same X" invariant at the
+  database level -- MySQL rejects the second conflicting INSERT
+  unconditionally, regardless of whether any transaction, lock, or
+  application-level check exists around it. Follow this exact procedure:
+  1. Identify the invariant's key columns (e.g. "no seat booked twice" ->
+     the columns that together identify a unique seat-in-context).
+  2. Find the UNIQUE constraint in the DDL covering exactly those columns.
+  3. If it exists and covers the right columns: the invariant IS enforced
+     at the database level. This is true even if transaction_strategy's
+     prose separately mentions row-level locking and the DDL has no
+     explicit locking statement -- locking is an optional efficiency
+     technique (avoiding wasted work under contention), NOT a requirement
+     for correctness once the constraint exists. Do NOT raise a critical
+     issue solely because prose describes a mechanism (locking, explicit
+     transactions) that the DDL doesn't literally show -- DDL never
+     contains that kind of session-level logic in the first place; check
+     the constraint, not the prose's completeness.
+  4. Only if the constraint is MISSING, or covers the WRONG columns (state
+     exactly which columns it actually covers vs. which it should), is
+     this a "critical" issue.
 - Could double-booking, overselling, lost updates, or other race conditions
-  still occur under concurrent access despite the stated strategy?
+  still occur under concurrent access despite the stated strategy? Answer
+  this by checking the constraint per steps 1-4 above, not by checking
+  whether the prose is complete.
 
 [transactions]
 - Are transaction boundaries and isolation level appropriate for the stated

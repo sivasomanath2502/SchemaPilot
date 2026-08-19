@@ -9,6 +9,9 @@ schema_agent_validated, review_agent, er_diagram_agent) observed across
 actual pipeline runs, not assumed.
 """
 
+from langsmith import traceable
+
+
 DECISION_FIELDS = [
     "caching", "replication", "search", "partitioning", "sharding",
     "pagination", "failure_handling", "idempotency", "consistency_strategy",
@@ -62,7 +65,7 @@ def _all_trade_offs(selection: dict, schema: dict) -> str:
         )
     return "\n".join(lines) or "No trade-offs recorded."
 
-
+@traceable(name="report_agent", run_type="chain")
 def run_report_agent(requirement: dict, selection: dict, schema: dict,
                       review: dict, er_diagram: str) -> dict:
     entities = schema.get("entities", [])

@@ -42,20 +42,6 @@ def _get_connection():
 @mcp.tool()
 @traceable(name="validate_sql", run_type="tool")
 def validate_sql(sql: str) -> dict:
-    """Check whether SQL statements are syntactically and semantically valid
-    against MySQL.
-
-    IMPORTANT: MySQL's DDL statements (CREATE/ALTER/DROP TABLE) cause an
-    implicit commit and CANNOT be rolled back -- there is no true "dry run"
-    for DDL in MySQL (unlike PostgreSQL, which does support transactional
-    DDL). This tool works around that by (1) pre-emptively dropping any
-    tables it's about to create, so leftover state from any prior crashed
-    run can never block a fresh call, then (2) executing the SQL, then
-    (3) explicitly dropping whatever it created, so no permanent objects
-    remain after the call returns either way.
-
-    sql: one or more SQL statements separated by semicolons.
-    """
     created_tables = _CREATE_TABLE_RE.findall(sql)
 
     conn = _get_connection()
@@ -63,14 +49,17 @@ def validate_sql(sql: str) -> dict:
     errors = []
     statements_checked = 0
 
-    # idempotency: clear any leftover tables with the same names before we start,
-    # so stale state from an earlier crashed run can never cause a false failure
-    for table_name in created_tables:
-        try:
-            cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`;")
-            conn.commit()
-        except Exception:
-            pass
+    def _drop_all(table_names):
+        cursor.execute("SET FOREIGN_KEY_CHECKS=0;")
+        for table_name in table_names:
+            try:
+                cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`;")
+            except Exception:
+                pass
+        cursor.execute("SET FOREIGN_KEY_CHECKS=1;")
+        conn.commit()
+
+    _drop_all(created_tables)
 
     try:
         cursor.execute(sql)
@@ -86,12 +75,7 @@ def validate_sql(sql: str) -> dict:
         errors.append(str(e))
         conn.rollback()
     finally:
-        for table_name in created_tables:
-            try:
-                cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`;")
-                conn.commit()
-            except Exception:
-                pass
+        _drop_all(created_tables)
         cursor.close()
         conn.close()
 

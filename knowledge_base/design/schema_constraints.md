@@ -16,6 +16,29 @@ Enforce business uniqueness rules such as:
 - booking reference number
 - a composite uniqueness rule, e.g. `(show_id, seat_id)` for a seat booking — one seat can only be booked once per show
 
+## When a single-column or composite unique constraint IS sufficient (no locking needed)
+For a "no two rows can share this exact key" invariant — like `(show_id, seat_id)`
+above — the UNIQUE constraint is COMPLETE on its own. Nothing else is required:
+
+- No explicit `SELECT ... FOR UPDATE` or row lock is needed.
+- No explicit transaction wrapping the INSERT is needed for correctness (though
+  a transaction may still be used for other reasons, e.g. inserting a booking
+  and a payment record together atomically — that's a different concern, not
+  what makes the uniqueness invariant hold).
+- The database rejects the conflicting INSERT unconditionally, the instant it
+  is attempted, regardless of what any concurrent request's application code
+  believed to be true when it ran its own check.
+
+**Do not confuse this with the "When constraints alone aren't enough" case below.**
+That section is about a DIFFERENT kind of invariant — one that spans MULTIPLE
+rows and requires a computed aggregate (e.g. "total booked seats ≤ venue
+capacity," which no single row's uniqueness can express). A single-row
+uniqueness rule like "this exact key can only appear once" is fully solved by
+the constraint alone. Before flagging a missing locking/transaction mechanism
+as a problem, first classify which case applies: single-key uniqueness (solved
+by UNIQUE alone) vs. multi-row aggregate invariant (needs a transaction/lock in
+addition to or instead of a constraint).
+
 ## Check constraints
 Enforce simple domain invariants directly in the schema where the database supports them — e.g. `CHECK (price >= 0)`, `CHECK (status IN ('pending', 'confirmed', 'cancelled'))`. Not a substitute for complex business logic, but useful for simple, always-true rules.
 
@@ -53,6 +76,9 @@ For every important business rule, ask: "Can concurrent requests violate this ru
 - Could concurrent requests bypass an application-only check for this rule?
 - Is the uniqueness rule single-column or composite?
 - Does this invariant span multiple rows, requiring a transaction rather than (or in addition to) a constraint?
+- If a single-row UNIQUE constraint already covers the exact invariant, is
+  there evidence the invariant is actually multi-row (an aggregate/count
+  across rows), or is the constraint alone already sufficient?
 
 ## Source / grounding
 Curated database integrity knowledge.
