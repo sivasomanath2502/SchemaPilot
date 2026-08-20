@@ -20,7 +20,8 @@ import json
 import sys
 from pathlib import Path
 from typing import TypedDict
-
+import time
+from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -151,6 +152,12 @@ if __name__ == "__main__":
         "er_diagram": "",
         "report": {},
     })
-
+    results_dir = Path("evaluation/results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    app_name = final_state.get("requirement", {}).get("application", "run").replace(" ", "_").lower()
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_path = results_dir / f"{app_name}_{timestamp}.json"
+    out_path.write_text(json.dumps(final_state, indent=2), encoding="utf-8")
+    print(f"\nFull result saved to: {out_path}")
     print("\n\n=== FINAL RESULT ===")
     print(json.dumps(final_state, indent=2))

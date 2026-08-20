@@ -1,0 +1,27 @@
+{
+  "sections": [
+    {"key": "requirements_scope", "weight": 5, "method": "deterministic"},
+    {"key": "scale", "weight": 5, "method": "deterministic"},
+    {"key": "features_roles", "weight": 5, "method": "deterministic"},
+    {"key": "read_vs_write", "weight": 5, "method": "deterministic"},
+    {"key": "concurrency", "weight": 10, "method": "deterministic"},
+    {"key": "entities", "weight": 10, "method": "deterministic"},
+    {"key": "relationships_cardinality", "weight": 5, "method": "deterministic"},
+    {"key": "schema", "weight": 10, "method": "deterministic"},
+    {"key": "sql_vs_nosql", "weight": 8, "method": "llm_judge"},
+    {"key": "important_queries", "weight": 5, "method": "deterministic"},
+    {"key": "indexes", "weight": 5, "method": "deterministic"},
+    {"key": "cache", "weight": 3, "method": "llm_judge"},
+    {"key": "replication", "weight": 3, "method": "llm_judge"},
+    {"key": "search", "weight": 3, "method": "llm_judge"},
+    {"key": "partitioning", "weight": 3, "method": "llm_judge"},
+    {"key": "sharding", "weight": 3, "method": "llm_judge"},
+    {"key": "pagination", "weight": 2, "method": "deterministic"},
+    {"key": "transactions", "weight": 5, "method": "deterministic"},
+    {"key": "failure_handling", "weight": 3, "method": "deterministic"},
+    {"key": "idempotency", "weight": 3, "method": "deterministic"},
+    {"key": "consistency", "weight": 3, "method": "deterministic"},
+    {"key": "final_architecture", "weight": 5, "method": "llm_judge"},
+    {"key": "trade_offs", "weight": 4, "method": "deterministic"}
+  ]
+}

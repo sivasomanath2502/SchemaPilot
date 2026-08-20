@@ -1,0 +1,22 @@
+[
+  {"question": "When should sharding be considered?", "expected_sources": ["design/sharding_deep.md"], "category": "scaling"},
+  {"question": "What is the difference between partitioning and sharding?", "expected_sources": ["design/partitioning_deep.md", "design/sharding_deep.md"], "category": "scaling"},
+  {"question": "When should a system avoid sharding?", "expected_sources": ["design/sharding_deep.md"], "category": "scaling"},
+  {"question": "What are the trade-offs of read replicas?", "expected_sources": ["design/replication_deep.md"], "category": "scaling"},
+  {"question": "How should replication lag affect read-after-write behavior?", "expected_sources": ["design/replication_deep.md", "design/consistency_deep.md"], "category": "scaling"},
+  {"question": "How should concurrent ticket booking prevent double booking?", "expected_sources": ["design/schema_constraints.md", "design/transactions_concurrency_deep.md"], "category": "concurrency"},
+  {"question": "What is idempotency and why is it needed for retryable operations?", "expected_sources": ["design/idempotency_deep.md"], "category": "concurrency"},
+  {"question": "What isolation level prevents lost updates under concurrent writes?", "expected_sources": ["design/transactions_concurrency_deep.md"], "category": "concurrency"},
+  {"question": "When should Redis be introduced?", "expected_sources": ["design/caching.md", "databases/redis.md"], "category": "database selection"},
+  {"question": "When should OpenSearch be used instead of MySQL search?", "expected_sources": ["design/search_architecture.md", "databases/opensearch.md"], "category": "database selection"},
+  {"question": "When should a document database like MongoDB be chosen over a relational database?", "expected_sources": ["databases/mongodb.md", "selection/database_selection_framework.md"], "category": "database selection"},
+  {"question": "When is a graph database like Neo4j the right choice?", "expected_sources": ["databases/neo4j.md"], "category": "database selection"},
+  {"question": "What decision framework should guide picking a primary database?", "expected_sources": ["selection/database_selection_framework.md", "selection/decision_rules.md"], "category": "database selection"},
+  {"question": "What are common anti-patterns when selecting a database architecture?", "expected_sources": ["selection/anti_patterns_deep.md"], "category": "database selection"},
+  {"question": "When should cursor pagination be preferred over offset pagination?", "expected_sources": ["design/pagination_deep.md"], "category": "performance"},
+  {"question": "How should indexes be chosen for a set of important queries?", "expected_sources": ["design/indexing_deep.md", "design/query_aware_design.md"], "category": "performance"},
+  {"question": "When is denormalization justified over a fully normalized schema?", "expected_sources": ["design/normalization_denormalization.md"], "category": "performance"},
+  {"question": "How should a system handle partial failure during a multi-step operation?", "expected_sources": ["design/failure_handling_deep.md", "operations/reliability.md"], "category": "reliability"},
+  {"question": "What backup and recovery strategy should a database have?", "expected_sources": ["operations/backup_recovery.md"], "category": "reliability"},
+  {"question": "How should soft delete be implemented versus hard delete?", "expected_sources": ["design/soft_delete_and_lifecycle.md"], "category": "reliability"}
+]

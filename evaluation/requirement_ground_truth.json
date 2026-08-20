@@ -1,0 +1,82 @@
+{
+  "ticket_booking": {
+    "description": "Design a database for an online ticket booking system. Users should be able to search events, select seats and book tickets. Multiple users may try to book the same seat simultaneously. Double booking must never occur.",
+    "expected_entities": ["User", "Event", "Seat", "Booking"],
+    "expected_critical_invariant_keywords": ["double", "booking", "seat"],
+    "expected_features_keywords": ["search", "select", "seat", "book"],
+    "expected_search_required": true,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "ecommerce": {
+    "description": "Design a database for an e-commerce platform. Customers browse products, add items to a cart, and place orders. Product inventory must never go negative — two customers should not both be able to buy the last unit of a product.",
+    "expected_entities": ["Customer", "Product", "Cart", "Order"],
+    "expected_critical_invariant_keywords": ["inventory", "negative", "unit"],
+    "expected_features_keywords": ["browse", "cart", "order"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "food_delivery": {
+    "description": "Design a database for a food delivery app. Customers order from restaurants, and a delivery driver is assigned to each order. Order status must move through a defined lifecycle (placed, preparing, out for delivery, delivered) and never skip backward.",
+    "expected_entities": ["Customer", "Restaurant", "Order", "Driver"],
+    "expected_critical_invariant_keywords": ["status", "lifecycle", "backward"],
+    "expected_features_keywords": ["order", "restaurant", "driver", "assign"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "banking_transfer": {
+    "description": "Design a database for a banking system supporting money transfers between accounts. A transfer must either fully complete (debit one account, credit the other) or not happen at all — partial transfers must never occur, even under concurrent transfer requests on the same account.",
+    "expected_entities": ["Account", "Transfer", "User"],
+    "expected_critical_invariant_keywords": ["debit", "credit", "partial", "atomic"],
+    "expected_features_keywords": ["transfer", "account"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "social_network": {
+    "description": "Design a database for a social network. Users create posts, follow other users, and see a feed of posts from people they follow. The system should support a large number of followers per popular user.",
+    "expected_entities": ["User", "Post", "Follow"],
+    "expected_critical_invariant_keywords": ["follow"],
+    "expected_features_keywords": ["post", "follow", "feed"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "inventory_management": {
+    "description": "Design a database for a warehouse inventory management system. Staff record stock arriving and leaving multiple warehouse locations. Stock counts must always be accurate and never allow a removal that would take a location's count below zero.",
+    "expected_entities": ["Item", "Warehouse", "StockMovement"],
+    "expected_critical_invariant_keywords": ["below zero", "negative", "count"],
+    "expected_features_keywords": ["stock", "warehouse", "record"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "equipment_rental": {
+    "description": "Design a database for an equipment rental marketplace. Owners list equipment for rent, and renters book equipment for a date range. The same piece of equipment must never be double-booked for overlapping date ranges.",
+    "expected_entities": ["Owner", "Renter", "Equipment", "Booking"],
+    "expected_critical_invariant_keywords": ["overlap", "double", "date range"],
+    "expected_features_keywords": ["list", "book", "rent"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "university_research": {
+    "description": "Design a database for a university research collaboration platform. Researchers create projects, invite collaborators, and upload datasets tied to specific projects. Only invited collaborators should be able to access a project's data.",
+    "expected_entities": ["Researcher", "Project", "Collaborator", "Dataset"],
+    "expected_critical_invariant_keywords": ["invited", "access", "collaborator"],
+    "expected_features_keywords": ["project", "invite", "upload", "dataset"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "healthcare_appointment": {
+    "description": "Design a database for a healthcare appointment system. Patients book appointments with doctors at specific time slots. A doctor must never be double-booked for overlapping appointment times.",
+    "expected_entities": ["Patient", "Doctor", "Appointment"],
+    "expected_critical_invariant_keywords": ["double", "overlap", "time slot"],
+    "expected_features_keywords": ["book", "appointment", "doctor"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  },
+  "document_collaboration": {
+    "description": "Design a database for a document collaboration platform. Users create documents and share them with specific other users for editing. Two users editing the same document at the same time must not silently overwrite each other's changes.",
+    "expected_entities": ["User", "Document", "Share"],
+    "expected_critical_invariant_keywords": ["overwrite", "concurrent", "edit"],
+    "expected_features_keywords": ["document", "share", "edit"],
+    "expected_search_required": false,
+    "not_stated_should_be_flagged": ["expected_scale", "peak_traffic", "data_growth", "availability_requirement", "latency_requirement"]
+  }
+}
