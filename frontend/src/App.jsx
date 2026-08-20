@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import mermaid from 'mermaid'
 import './App.css'
 
 const API_BASE = 'http://localhost:8000'
@@ -541,10 +542,78 @@ function SchemaTab({ schema }) {
 }
 
 function ERDiagramTab({ diagram }) {
+  const diagramRef = useRef(null)
+  const [renderError, setRenderError] = useState(null)
+
+  useEffect(() => {
+    if (!diagram || !diagramRef.current) return
+
+    let cancelled = false
+
+    async function renderDiagram() {
+      try {
+        setRenderError(null)
+
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          theme: 'base',
+          themeVariables: {
+            primaryColor: '#f8fafc',
+            primaryTextColor: '#172033',
+            primaryBorderColor: '#667085',
+            lineColor: '#667085',
+            secondaryColor: '#eef2f6',
+            tertiaryColor: '#ffffff',
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontSize: '13px',
+          },
+          flowchart: {
+            useMaxWidth: true,
+            htmlLabels: true,
+            curve: 'basis',
+          },
+        })
+
+        const container = diagramRef.current
+        container.innerHTML = ''
+
+        const id = `schema-er-${Date.now()}`
+
+        const { svg, bindFunctions } = await mermaid.render(
+          id,
+          diagram
+        )
+
+        if (cancelled) return
+
+        container.innerHTML = svg
+
+        if (bindFunctions) {
+          bindFunctions(container)
+        }
+      } catch (error) {
+        console.error('Mermaid rendering failed:', error)
+
+        if (!cancelled) {
+          setRenderError(
+            error?.message || 'Unable to render the ER diagram.'
+          )
+        }
+      }
+    }
+
+    renderDiagram()
+
+    return () => {
+      cancelled = true
+    }
+  }, [diagram])
+
   if (!diagram) {
     return (
       <div className="tab-panel empty-panel">
-        <h2>ER Diagram</h2>
+        <h2>Entity Relationship Diagram</h2>
         <p>No ER diagram was returned by the pipeline.</p>
       </div>
     )
@@ -554,10 +623,11 @@ function ERDiagramTab({ diagram }) {
     <div className="tab-panel">
       <div className="section-intro">
         <span className="eyebrow">Agent 05</span>
+
         <h2>Entity Relationship Diagram</h2>
+
         <p>
-          Generated from the validated schema. The diagram is shown as Mermaid
-          source so the exact generated artifact is preserved.
+          Generated directly from the final validated database schema.
         </p>
       </div>
 
@@ -569,22 +639,41 @@ function ERDiagramTab({ diagram }) {
 
         <button
           className="secondary compact"
-          onClick={() => navigator.clipboard?.writeText(diagram)}
+          onClick={() => {
+            navigator.clipboard?.writeText(diagram)
+          }}
         >
           Copy Mermaid
         </button>
       </div>
 
-      <div className="diagram-container">
-        <pre className="mermaid-block">
-          <code>{diagram}</code>
-        </pre>
-      </div>
+      {renderError ? (
+        <div className="diagram-error">
+          <strong>ER diagram could not be rendered.</strong>
+
+          <p>{renderError}</p>
+
+          <details>
+            <summary>Show Mermaid source</summary>
+
+            <pre className="code-block">
+              <code>{diagram}</code>
+            </pre>
+          </details>
+        </div>
+      ) : (
+        <div className="diagram-container">
+          <div
+            ref={diagramRef}
+            className="mermaid-rendered"
+          />
+        </div>
+      )}
 
       <div className="diagram-note">
-        <strong>Consistency rule:</strong> the ER diagram is generated from the
-        final validated schema, so the entities and relationships should match
-        the SQL shown in the Schema tab.
+        <strong>Consistency rule:</strong> the ER diagram is generated from
+        the final validated schema, so the entities and relationships should
+        match the SQL shown in the Schema tab.
       </div>
     </div>
   )

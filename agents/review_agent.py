@@ -10,29 +10,37 @@ Phase J changes:
 - Now also receives `selection` (Database Selection Agent output) -- without
   it the agent had no visibility into which supporting components (Redis,
   OpenSearch, replicas) were actually recommended, so it could not judge
-  whether they're used appropriately. This was a real gap found during the
-  Phase J audit, not a hypothetical one: graph.py's review_step was calling
-  run_review_agent(requirement, schema) with no selection argument at all.
+  whether they're used appropriately.
 - Category checklist expanded from 5 categories to the 14 below, covering
   every checklist item in the proposal's Section 16.
 - _design_to_prose (renamed from _schema_to_prose) now also surfaces
-  constraints, and the requirement's idempotency/pagination/lifecycle/
-  consistency/concurrency/search fields, and the selection's
-  architecture_summary + supporting_components -- all of which existed
-  upstream since Phase G/H/11 but were never passed into this agent's context.
+  constraints, the requirement's fuller field set, and the selection's
+  9 structured architectural decisions (Phase J(b)).
 
-Per the proposal's Section 10 diagram, the "Improve" loop (re-invoking Schema
-Agent with this critique) is wired in Phase 13's LangGraph orchestration --
-this agent's job is just to produce the structured critique.
+Phase J(b) fixes (this version):
+- Retrieval added (retrieve_review_context) -- previously this agent had
+  zero RAG grounding despite the spec's Section 21 explicitly listing it
+  as a retrieval consumer.
+- Concurrency section rewritten with an explicit step-by-step procedure
+  after repeated false positives where the model treated "transaction_
+  strategy mentions row-level locking but the DDL doesn't show it
+  explicitly" as proof the invariant was unenforced, when a correctly-
+  scoped UNIQUE constraint is sufficient on its own.
+- Output-shape drift fixes: the model was twice observed producing wrong
+  JSON shapes under load -- once re-serializing the entire input under
+  input-derived keys (fixed via the CRITICAL OUTPUT RULE + end-of-prompt
+  reminder), and once emitting a bare string instead of an issue object
+  inside "issues" (fixed via the salvage logic in run_review_agent).
 """
 
 import json
 import re
 import time
+from pathlib import Path
+
 from langsmith import traceable
 import ollama
 from pydantic import BaseModel, Field, ValidationError
-from pathlib import Path
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 
@@ -44,21 +52,21 @@ MAX_TOTAL_CHUNKS = 10
 MODEL_NAME = "qwen3:4b"
 
 CATEGORIES = [
-    "entities_relationships",  
-    "constraints",              
-    "indexes",                  # missing or badly chosen indexes
-    "queries",                  # missing important queries, queries that don't use available indexes
-    "concurrency",              # race conditions, unenforced critical invariant
-    "transactions",             # missing/incorrect transaction boundaries, isolation
-    "consistency",               # consistency requirement not matched by design
-    "caching",                  # inappropriate caching, cache used as source of truth
-    "search",                   # inappropriate or unjustified search component use
-    "replication",               # unnecessary or missing replication
-    "partitioning_sharding",     # unnecessary/premature partitioning or sharding, poor shard key, hotspots, cross-shard txn problems
-    "pagination",                # missing pagination, wrong pagination strategy for the access pattern
-    "idempotency",               # missing idempotency keys, retry problems, timeout ambiguity
-    "reliability",                # failure handling, backup/recovery gaps
-    "architecture",              # overengineering, unjustified complexity, unnecessary components
+    "entities_relationships",
+    "constraints",
+    "indexes",                   # missing or badly chosen indexes
+    "queries",                   # missing important queries, queries that don't use available indexes
+    "concurrency",                # race conditions, unenforced critical invariant
+    "transactions",               # missing/incorrect transaction boundaries, isolation
+    "consistency",                 # consistency requirement not matched by design
+    "caching",                    # inappropriate caching, cache used as source of truth
+    "search",                     # inappropriate or unjustified search component use
+    "replication",                 # unnecessary or missing replication
+    "partitioning_sharding",       # unnecessary/premature partitioning or sharding, poor shard key, hotspots, cross-shard txn problems
+    "pagination",                  # missing pagination, wrong pagination strategy for the access pattern
+    "idempotency",                 # missing idempotency keys, retry problems, timeout ambiguity
+    "reliability",                 # failure handling, backup/recovery gaps
+    "architecture",                # overengineering, unjustified complexity, unnecessary components
 ]
 
 SYSTEM_PROMPT = """You are a Review Agent acting as a senior database architect.
@@ -152,26 +160,6 @@ name shown in brackets when you report an issue in that area.
 - Do list-returning important queries have a pagination strategy consistent
   with pagination_requirements? Offset pagination on a large, frequently
   changing table is usually wrong -- flag it if so.
-
-[idempotency]
-- Do operations named in idempotency_requirements actually have a mechanism
-  (idempotency key column, unique constraint, etc.) to be safely retried? Is
-  there ambiguity about what happens on a client timeout/retry?
-
-[reliability]
-- Is there any handling for partial failure, backups, or recovery where the
-  requirements call for it (e.g. lifecycle_requirements, availability_requirement)?
-
-[architecture]
-- Is any supporting component (Redis, OpenSearch, replicas, partitioning,
-  sharding) present in the design without being justified by the stated
-  requirements? Flag overengineering explicitly -- this is as real a problem
-  as a missing feature.
-
-[pagination]
-- Do list-returning important queries have a pagination strategy consistent
-  with pagination_requirements? Offset pagination on a large, frequently
-  changing table is usually wrong -- flag it if so.
 - If the CHOSEN ARCHITECTURE section states a specific pagination decision
   (e.g. "keyset pagination"), check whether important_queries actually
   implements it. A stated decision that the schema never implements is a
@@ -186,20 +174,28 @@ name shown in brackets when you report an issue in that area.
   columns claimed -- don't take the claim at face value, check it the same
   way you check the critical invariant in [concurrency].
 
-[replication] / [partitioning_sharding] / [caching] / [search]
-- Cross-check: is the stated decision's "reason"/"evidence" actually
-  supported by the requirement fields shown above, or does it contradict
-  them (e.g. a decision citing "read-heavy workload" when read_write_ratio
-  is "balanced")? A decision whose own stated evidence doesn't match the
-  requirements is an [architecture] issue, not a schema issue.
-
 [reliability]
 - Is there any handling for partial failure, backups, or recovery where the
   requirements call for it (e.g. lifecycle_requirements, availability_requirement)?
-- Check the failure_handling decision above against this -- if it defers
-  something (e.g. "no multi-region failover") because availability_requirement
-  is unstated, that is a sound, non-critical decision; don't flag it as an
-  issue merely for choosing the simpler option under missing information.
+- Check the failure_handling decision (in CHOSEN ARCHITECTURE) against this --
+  if it defers something (e.g. "no multi-region failover") because
+  availability_requirement is unstated, that is a sound, non-critical
+  decision; don't flag it as an issue merely for choosing the simpler option
+  under missing information.
+
+[architecture]
+- Is any supporting component (Redis, OpenSearch, replicas, partitioning,
+  sharding) present in the design without being justified by the stated
+  requirements? Flag overengineering explicitly -- this is as real a problem
+  as a missing feature.
+- Cross-check every decision under CHOSEN ARCHITECTURE (caching, replication,
+  search, partitioning, sharding): is the stated "reason"/"evidence"
+  actually supported by the requirement fields shown above, or does it
+  contradict them (e.g. a decision citing "read-heavy workload" when
+  read_write_ratio is "balanced")? A decision whose own stated evidence
+  doesn't match the requirements belongs in this [architecture] category,
+  not the category the decision itself is about.
+
 SEVERITY GUIDANCE:
 - "critical": the critical invariant is unenforced, data can be lost/
   corrupted, or a stated hard requirement is structurally violated.
@@ -225,12 +221,27 @@ Respond with ONLY a JSON object in exactly this shape:
   "overall_assessment": "<2-3 sentences: is this design sound enough to use?>"
 }
 
+CRITICAL OUTPUT RULE: your JSON response must contain EXACTLY these two
+top-level keys -- "issues" and "overall_assessment" -- and NO OTHERS. The
+material you are given (labeled REQUIREMENTS, CHOSEN ARCHITECTURE, SCHEMA,
+Actual SQL DDL, Important queries, RETRIEVED REFERENCE MATERIAL) is INPUT
+for you to analyze, not a template for your output's structure. Do NOT
+create JSON keys named "schema", "requirements", "actual_sql_ddl",
+"transaction_strategy", or anything else derived from the input's section
+headers. Do NOT copy, restate, or re-serialize the schema, DDL, or
+requirements back into your response in any form -- your job is to output
+findings ABOUT that material, never the material itself.
+
 If you find no issues in a category, simply don't report one for it -- do not
 pad the list. If you find no issues at all, return an empty "issues" list,
 but still explain why in overall_assessment.
 
-Do NOT repeat or copy the input schema into your output. Output ONLY the
-JSON object described above.
+Every item in "issues" MUST be a JSON object with all four keys shown above
+-- never a bare string. If you have only one finding, it still must be
+wrapped as {"category": ..., "severity": ..., "description": ..., "suggested_fix": ...},
+not a plain string in the array.
+
+Only output the JSON object described above.
 """
 
 
@@ -280,9 +291,12 @@ def _normalize_category(raw_category: str) -> str:
     return synonyms.get(c, c if c else "architecture")
 
 
-# _design_to_prose -- extend "CHOSEN ARCHITECTURE" section
-
 def _design_to_prose(requirement: dict, selection: dict, schema: dict, retrieved_context: str) -> str:
+    """Prose, not raw JSON -- avoids the model echoing input structure back,
+    same lesson learned in the Schema Agent (Phase 8). Phase J: surfaces
+    constraints, the requirement's fuller field set, and the selection's
+    chosen architecture. Phase J(b): also surfaces the 9 structured
+    architectural decisions, and retrieved RAG context."""
     entities = ", ".join(e["name"] for e in schema.get("entities", []))
     relationships = "; ".join(
         f"{r['from']} -> {r['to']} ({r['type']})" for r in schema.get("relationships", [])
@@ -344,8 +358,16 @@ def _design_to_prose(requirement: dict, selection: dict, schema: dict, retrieved
         f"RETRIEVED REFERENCE MATERIAL (verify your critique against this -- "
         f"e.g. if a source states how a constraint should be structured to "
         f"enforce an invariant, check the actual DDL against that source's "
-        f"stated pattern, not just your own reasoning):\n{retrieved_context}"
+        f"stated pattern, not just your own reasoning):\n{retrieved_context}\n\n"
+        f"---\n"
+        f"REMINDER: respond with ONLY the two-key JSON object described in the "
+        f"system prompt ('issues' and 'overall_assessment'). Do not create a key "
+        f"for any section above (schema, actual_sql_ddl, requirements, etc.) -- "
+        f"those are the input you are critiquing, not your output's shape. Every "
+        f"item in 'issues' must be a full object, never a bare string."
     )
+
+
 def build_review_queries(requirement: dict, selection: dict) -> list[str]:
     """Targeted retrieval per the spec's Section 21 Review Agent list:
     transactions, concurrency, consistency, caching, replication,
@@ -399,7 +421,6 @@ def format_review_context(chunks: list) -> str:
         parts.append(f"[Source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}")
     return "\n\n---\n\n".join(parts)
 
-# review_agent.py
 
 def _synthesize_overall_assessment(issues: list[dict]) -> str:
     """Fallback when the model structurally omits overall_assessment --
@@ -422,6 +443,34 @@ def _synthesize_overall_assessment(issues: list[dict]) -> str:
         f"{len(issues)} non-critical issue(s) found, no critical issues "
         f"(auto-summarized -- the model omitted its own overall_assessment field)."
     )
+
+
+def _normalize_issues(raw_issues: list) -> list[dict]:
+    """Guards against the model emitting an 'issues' array item as a bare
+    string instead of the required object -- observed once when the model
+    had only a single simple finding and skipped the full object shape.
+    Salvage rather than discard, same philosophy as _normalize_category.
+    Severity defaults to 'warning', never 'critical' -- an ambiguous
+    salvaged finding must never auto-trigger the improve loop."""
+    normalized = []
+    for issue in raw_issues:
+        if isinstance(issue, str):
+            print(f"    [salvage] issue was a bare string, wrapping: {issue[:100]}")
+            issue = {
+                "category": "architecture",
+                "severity": "warning",
+                "description": issue,
+                "suggested_fix": "unspecified -- model returned this issue as plain text",
+            }
+        elif not isinstance(issue, dict):
+            print(f"    [salvage] issue had unexpected type {type(issue)}, skipping: {issue}")
+            continue
+        issue["category"] = _normalize_category(issue.get("category", ""))
+        issue.setdefault("severity", "warning")
+        issue.setdefault("description", "")
+        issue.setdefault("suggested_fix", "")
+        normalized.append(issue)
+    return normalized
 
 
 @traceable(name="review_agent", run_type="chain")
@@ -454,19 +503,22 @@ def run_review_agent(requirement: dict, selection: dict, schema: dict, max_retri
 
         try:
             data = json.loads(raw)
-            for issue in data.get("issues", []):
-                issue["category"] = _normalize_category(issue.get("category", ""))
+            data["issues"] = _normalize_issues(data.get("issues", []))
             if not data.get("overall_assessment"):
-                print("  [attempt {}] model omitted overall_assessment -- backfilling from issues".format(attempt))
-                data["overall_assessment"] = _synthesize_overall_assessment(data.get("issues", []))
+                print(f"  [attempt {attempt}] model omitted overall_assessment -- backfilling from issues")
+                data["overall_assessment"] = _synthesize_overall_assessment(data["issues"])
             return ReviewOutput(**data)
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
             print(f"  [attempt {attempt}] failed to parse/validate: {e}")
-            print(f"  raw output (last 300 chars): ...{raw[-300:]}")
+            debug_path = f"review_agent_failure_attempt{attempt}.txt"
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+            print(f"  [attempt {attempt}] full raw output written to {debug_path}")
             continue
 
     raise RuntimeError(f"Review Agent failed after {max_retries + 1} attempts. Last error: {last_error}")
+
 
 if __name__ == "__main__":
     example_requirement = {
