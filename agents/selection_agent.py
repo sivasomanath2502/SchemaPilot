@@ -17,18 +17,35 @@ done_reason="stop" -- not a token-budget truncation, the model just omitted
 it). A full retry on a 682s call is far too expensive to pay for one
 dropped key.
 
-Phase H(b) v2 (this version): split the 9 decisions into TWO smaller
-groups of ~5 and ~4, each its own call with its own worked example. This
-roughly halves the leaf-field count per call (was 54, now ~30 and ~24),
-which is the same fix that made Schema Agent's conceptual/SQL split work --
-and importantly, if one group drops a key or fails validation, only that
-smaller group is retried, not the other successful one.
+Phase H(b) v2: split the 9 decisions into TWO smaller groups of ~5 and ~4,
+each its own call with its own worked example. This roughly halves the
+leaf-field count per call (was 54, now ~30 and ~24) -- and if one group
+drops a key or fails validation, only that smaller group is retried.
 
 Renamed the 9th decision from "consistency" to "consistency_strategy" --
 the Requirement Agent already has a top-level "consistency" field (a
 plain string like "strong"), and having a *different, nested* field with
 the identical name on Selection's output was a landmine for whatever
 consumes both dicts later.
+
+Phase H(b) v3 (this version): fixed a real bug found via full raw-output
+dumps -- decisions-B was consistently failing with "Expecting ',' delimiter"
+at the same byte offset every run. The dump showed 3 of the 4 required
+keys were complete, well-formed JSON, and generation simply stopped mid-
+object with eval_count=None, done_reason=None (never seen on a successful
+call, which always reports real values). That combination -- clean partial
+JSON + no proper stop reason -- is the signature of a context-window
+overflow, not a formatting mistake: decisions-B's prompt (3 worked examples
++ 16 retrieved chunks + core's carried-forward reasoning) is the longest of
+the three calls, and num_ctx was never set explicitly, so it was silently
+using Ollama's model default (often 2048-4096), too small for this prompt.
+Fixed by setting num_ctx explicitly and generously for all three calls.
+Also fixed: the core call's exception handler was mislabeled "decisions-B"
+in its debug output (copy-paste leftover), and _run_group_call (which is
+what decisions-A/decisions-B actually run through) had no full-raw-output
+dump at all -- only a raw[:400] truncation, which is why decisions-B's
+real failure was invisible for three consecutive debugging rounds. Every
+LLM call now dumps its full raw text on failure, correctly labeled.
 """
 
 import json
@@ -50,6 +67,11 @@ EMBEDDING_MODEL = "qwen3-embedding:0.6b"
 
 CHUNKS_PER_QUERY = 4
 MAX_TOTAL_CHUNKS = 16
+
+# Context window for all three LLM calls in this agent. Previously unset
+# (relying on Ollama's model default, often 2048-4096), which was silently
+# truncating decisions-B mid-generation -- see module docstring.
+NUM_CTX = 8192
 
 CORE_SYSTEM_PROMPT = """You are a Database Selection Agent for a database architecture advisor.
 
@@ -286,11 +308,6 @@ def _requirement_to_prose(requirement: dict) -> str:
         f"Data growth: {requirement.get('data_growth', 'unknown')}. "
         f"Latency requirement: {requirement.get('latency_requirement', 'unstated')}. "
         f"Availability requirement: {requirement.get('availability_requirement', 'unstated')}. "
-        # Phase H(b): these four already exist on Requirement Agent's output
-        # (confirmed in the real Phase G run: idempotency/pagination were both
-        # "none identified") but were never forwarded here, so the
-        # idempotency/pagination/failure_handling decisions had no access
-        # to what was actually stated about them -- only general RAG theory.
         f"Transaction requirements: {requirement.get('transaction_requirements', 'unstated')}. "
         f"Idempotency requirements: {requirement.get('idempotency_requirements', 'none identified')}. "
         f"Pagination requirements: {requirement.get('pagination_requirements', 'none identified')}. "
@@ -448,7 +465,11 @@ def _call_llm(system_prompt: str, user_message: str, label: str, num_predict: in
         ],
         think=False,
         format="json",
-        options={"temperature": 0, "num_predict": num_predict},
+        options={
+            "temperature": 0,
+            "num_predict": num_predict,
+            "num_ctx": NUM_CTX,
+        },
     )
     elapsed = time.time() - start
     raw = _strip_code_fences(response["message"]["content"])
@@ -456,6 +477,9 @@ def _call_llm(system_prompt: str, user_message: str, label: str, num_predict: in
           f"done_reason={response.get('done_reason')}")
     if response.get("done_reason") == "length":
         print(f"  [{label}] WARNING: hit num_predict cap ({num_predict}), output may be truncated")
+    if response.get("eval_count") is None:
+        print(f"  [{label}] WARNING: eval_count/done_reason are None -- possible context-window "
+              f"overflow (num_ctx={NUM_CTX}) or an aborted generation, not a normal stop")
     return raw
 
 
@@ -470,7 +494,10 @@ def _run_group_call(system_prompt: str, user_message: str, label: str, expected_
         except (json.JSONDecodeError, ValidationError, ValueError) as e:
             last_error = e
             print(f"  [{label} attempt {attempt}] failed: {e}")
-            print(f"  raw output was: {raw[:400]}")
+            debug_path = f"selection_{label.replace('-', '_')}_failure_attempt{attempt}.txt"
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+            print(f"  [{label} attempt {attempt}] full raw output written to {debug_path}")
     raise RuntimeError(f"{label} failed after {max_retries + 1} attempts. Last error: {last_error}")
 
 
@@ -485,7 +512,6 @@ def run_selection_agent(requirement: dict, max_retries: int = 2) -> SelectionOut
 
     req_prose = _requirement_to_prose(requirement)
 
-    # --- Call 1: core database selection ---
     core_user_message = (
         f"Requirement summary:\n{req_prose}\n\n"
         f"Retrieved reference material:\n{context_text}"
@@ -499,10 +525,15 @@ def run_selection_agent(requirement: dict, max_retries: int = 2) -> SelectionOut
             break
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = e
-            print(f"  [core attempt {attempt}] failed to parse/validate: {e}")
-            print(f"  raw output was: {raw[:400]}")
+            print(f"  [core attempt {attempt}] failed: {e}")
+            debug_path = f"selection_core_failure_attempt{attempt}.txt"
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+            print(f"  [core attempt {attempt}] full raw output written to {debug_path}")
+            continue
     if core is None:
         raise RuntimeError(f"Selection Agent (core) failed after {max_retries + 1} attempts. Last error: {last_error}")
+
     decisions_user_message = (
         f"Requirement summary:\n{req_prose}\n\n"
         f"Chosen primary database: {core.primary_database}\n"
