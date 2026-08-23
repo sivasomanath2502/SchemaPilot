@@ -1005,7 +1005,7 @@ export default function App() {
 
       <div className="header-badge">
         <span className="status-dot" />
-        Six-agent workflow
+        Five-agent workflow
       </div>
       </header>
 
@@ -1036,7 +1036,7 @@ export default function App() {
 
             <div className="form-footer">
               <span className="form-note">
-                Requirement → Selection → Schema → Review → ER → Report
+                Requirement → Selection → Schema → Review → Improve → ER → Report
               </span>
 
               <button
