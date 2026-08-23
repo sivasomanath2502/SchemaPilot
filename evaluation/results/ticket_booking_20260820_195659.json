@@ -1,0 +1,361 @@
+{
+  "user_input": "Design a database for an online ticket booking system. Users should be able to search events, select seats and book tickets. Multiple users may try to book the same seat simultaneously. Double booking must never occur.",
+  "requirement": {
+    "application": "ticket_booking",
+    "entities": [
+      "User",
+      "Event",
+      "Seat",
+      "Booking"
+    ],
+    "consistency": "strong",
+    "concurrency": "high",
+    "critical_invariant": "No seat can be booked by more than one user at a time",
+    "workload": "mixed",
+    "read_write_ratio": "balanced",
+    "search_required": true,
+    "expected_scale": "unknown",
+    "actors": [
+      {
+        "role": "User",
+        "description": "Searches for events, selects seats, and books tickets"
+      }
+    ],
+    "features": [
+      "Search events",
+      "Seat selection",
+      "Ticket booking"
+    ],
+    "read_operations": [
+      "search events",
+      "search seats"
+    ],
+    "write_operations": [
+      "create booking"
+    ],
+    "peak_traffic": "unknown",
+    "data_growth": "unknown",
+    "availability_requirement": "unstated",
+    "latency_requirement": "unstated",
+    "transaction_requirements": "Atomic seat booking (ensure seat is not double-booked)",
+    "idempotency_requirements": "none identified",
+    "pagination_requirements": "none identified",
+    "lifecycle_requirements": "none identified",
+    "other_invariants": [
+      "Seats must be unique within an event"
+    ],
+    "assumptions": [
+      {
+        "field": "expected_scale",
+        "assumption": "unknown",
+        "reason": "not stated in the description"
+      },
+      {
+        "field": "peak_traffic",
+        "assumption": "unknown",
+        "reason": "not stated in the description"
+      },
+      {
+        "field": "data_growth",
+        "assumption": "unknown",
+        "reason": "not stated in the description"
+      },
+      {
+        "field": "availability_requirement",
+        "assumption": "unstated",
+        "reason": "not stated in the description"
+      },
+      {
+        "field": "latency_requirement",
+        "assumption": "unstated",
+        "reason": "not stated in the description"
+      }
+    ]
+  },
+  "selection": {
+    "pagination": {
+      "decision": "Keyset (cursor-based) pagination for event/seat listing queries",
+      "reason": "Offset pagination degrades on large tables as the offset grows, and the retrieved pagination guidance recommends keyset pagination to avoid deep-offset cost on large tables",
+      "evidence": "retrieved design/pagination_deep.md recommends keyset pagination to avoid deep-offset cost on large tables",
+      "alternative": "Simple offset/limit pagination",
+      "why_alternative_rejected": "Offset pagination has known performance degradation at scale and no strong reason (e.g. need for 'jump to page N') favors it here",
+      "trade_off": "Cursor pagination cannot jump to an arbitrary page number, only step forward/backward"
+    },
+    "failure_handling": {
+      "decision": "Daily automated backups with point-in-time recovery, no multi-region failover",
+      "reason": "Availability requirement is unstated, giving no evidence of a need for the operational complexity of multi-region failover; but data loss from any single-node failure must still be bounded, which backups address regardless of availability target",
+      "evidence": "requirement field availability_requirement is 'unstated' \u2014 this is about DATA DURABILITY/RECOVERY (backups, RPO/RTO), a separate concern from replication (which is about READ SCALING, already decided separately)",
+      "alternative": "Multi-region active-passive failover",
+      "why_alternative_rejected": "No stated availability target (e.g. '99.9% uptime') justifies the operational cost of maintaining a failover region",
+      "trade_off": "Recovery from a full node loss takes longer (restore-from-backup time) than an automatic failover would, in exchange for much lower operational complexity"
+    },
+    "idempotency": {
+      "decision": "Idempotency key required on booking-creation requests",
+      "reason": "The critical invariant (no double booking) means a retried request must not create a second booking, so the write path needs a way to detect and safely ignore duplicates",
+      "evidence": "requirement field idempotency_requirements combined with the critical_invariant about double booking",
+      "alternative": "Rely on the UNIQUE constraint alone with no explicit idempotency key",
+      "why_alternative_rejected": "A UNIQUE constraint prevents a second seat claim, but a client retry could still surface a confusing duplicate-error rather than safely returning the original booking result",
+      "trade_off": "Requires the client to generate and pass an idempotency key, adding a small amount of API surface complexity"
+    },
+    "consistency_strategy": {
+      "decision": "Strong transactional consistency with unique (show_id, seat_id) constraint on show_seats table",
+      "reason": "The requirement for atomic seat booking (no double-booking) and strong transactional consistency are best achieved through database-level constraints and transactions, as demonstrated in the ticket booking case study",
+      "evidence": "case_studies/ticket_booking_full_design.md specifies unique (show_id, seat_id) constraint to ensure seat ownership",
+      "alternative": "Eventual consistency with distributed locks or cache-based consistency",
+      "why_alternative_rejected": "Eventual consistency would risk duplicate bookings during high concurrency, which violates the critical invariant of seat ownership",
+      "trade_off": "Strong consistency requires higher transaction latency and database write overhead compared to eventual consistency"
+    },
+    "caching": {
+      "decision": "No caching layer",
+      "reason": "The requirement's latency requirement is unstated and workload is mixed with balanced read/write ratio, so there is no demonstrated need for caching to reduce database load.",
+      "evidence": "requirement field latency_requirement is 'unstated' and workload is 'mixed' with balanced read/write ratio",
+      "alternative": "Add Redis for read-through caching of seat lookups",
+      "why_alternative_rejected": "No specific hot-read pattern or latency target was described that a cache would need to satisfy",
+      "trade_off": "Without a cache, every read hits the primary database directly; simpler to operate but no headroom against read spikes"
+    },
+    "replication": {
+      "decision": "No read replicas",
+      "reason": "The requirement's peak traffic is unknown and availability requirement is unstated, so there is no evidence of a read bottleneck that a single primary can't handle.",
+      "evidence": "requirement field peak_traffic is 'unknown' and availability_requirement is 'unstated'",
+      "alternative": "Add one read replica for reporting queries",
+      "why_alternative_rejected": "No reporting/analytics workload was described, so there is nothing for a replica to offload yet",
+      "trade_off": "If read traffic grows unexpectedly, the single primary becomes a bottleneck sooner than it would with replicas in place"
+    },
+    "search": {
+      "decision": "OpenSearch for full-text search",
+      "reason": "The requirement explicitly states full-text search is needed, and OpenSearch is the dedicated search engine that provides full-text search, relevance ranking, and faceting capabilities without compromising transactional integrity.",
+      "evidence": "requirement field full_text_search is 'required'",
+      "alternative": "Use MySQL full-text indexes",
+      "why_alternative_rejected": "MySQL full-text indexes lack the advanced search capabilities like relevance ranking, fuzzy matching, and faceting required for this application",
+      "trade_off": "OpenSearch adds complexity to the infrastructure but ensures search queries remain fast and relevant without affecting the transactional database's consistency"
+    },
+    "partitioning": {
+      "decision": "No partitioning",
+      "reason": "The requirement's expected scale is unknown and data growth is unknown, so there is no evidence that partitioning would be necessary to manage data size or performance.",
+      "evidence": "requirement field expected_scale is 'unknown' and data_growth is 'unknown'",
+      "alternative": "Partition by event_id for better query performance",
+      "why_alternative_rejected": "No concrete data size or query patterns were described that would justify partitioning",
+      "trade_off": "Without partitioning, the database remains simple to manage but may become slow as data grows beyond the single node's capacity"
+    },
+    "sharding": {
+      "decision": "No sharding",
+      "reason": "The requirement's expected scale is unknown and peak traffic is unknown, so there is no evidence that sharding would be necessary to handle high concurrency or data volume.",
+      "evidence": "requirement field expected_scale is 'unknown' and peak_traffic is 'unknown'",
+      "alternative": "Shard by user_id to distribute load",
+      "why_alternative_rejected": "No concrete user count or traffic patterns were described that would justify sharding",
+      "trade_off": "Without sharding, the database remains simple to manage but may become a bottleneck as user traffic grows unexpectedly"
+    },
+    "primary_database": "MySQL",
+    "primary_reasoning": "The requirement for strong consistency and atomic seat booking (preventing double-booking) aligns with MySQL's ACID compliance and ability to enforce unique (show_id, seat_id) constraints. The retrieved context shows that database-level constraints like this are the only reliable way to prevent concurrent booking races, which matches the ticket booking use case. MySQL also supports the relational model needed for transactional integrity across entities like User, Event, and Seat.",
+    "architecture_summary": "MySQL + OpenSearch",
+    "alternatives": [
+      {
+        "database": "PostgreSQL",
+        "reasoning": "PostgreSQL also supports ACID transactions and unique constraints, but the retrieved context emphasizes MySQL's suitability for this workload due to its established use in transactional systems and the specific requirement for seat uniqueness. PostgreSQL's additional features like JSONB might not be necessary here."
+      }
+    ],
+    "supporting_components": [
+      {
+        "component": "OpenSearch",
+        "purpose": "Full-text search for events and show details",
+        "required": true
+      }
+    ],
+    "rejected": [
+      {
+        "database": "Redis",
+        "reason": "Redis is not suitable as the primary database for transactional state; it lacks ACID compliance and cannot enforce the unique (show_id, seat_id) constraint required for seat booking consistency."
+      },
+      {
+        "database": "MongoDB",
+        "reason": "MongoDB does not natively support the strong consistency and ACID transactions needed for atomic seat booking, and its document model would not reliably prevent double-booking without application-level checks that the retrieved context states are insufficient."
+      }
+    ]
+  },
+  "schema": {
+    "entities": [
+      {
+        "name": "User",
+        "description": "A registered user who can participate in ticket bookings."
+      },
+      {
+        "name": "Event",
+        "description": "A specific event with a unique identifier and a list of available seats."
+      },
+      {
+        "name": "Seat",
+        "description": "A physical or virtual seat within an event that can be booked."
+      },
+      {
+        "name": "Booking",
+        "description": "A record of a user booking a specific seat for an event."
+      }
+    ],
+    "relationships": [
+      {
+        "from": "User",
+        "to": "Booking",
+        "type": "one-to-many",
+        "description": "A user can make multiple bookings across different events."
+      },
+      {
+        "from": "Event",
+        "to": "Seat",
+        "type": "one-to-many",
+        "description": "An event contains multiple seats that can be booked."
+      },
+      {
+        "from": "Event",
+        "to": "Booking",
+        "type": "one-to-many",
+        "description": "An event can have multiple bookings of its seats."
+      },
+      {
+        "from": "Seat",
+        "to": "Booking",
+        "type": "one-to-one",
+        "description": "A seat can be booked by at most one user at a time."
+      }
+    ],
+    "sql_ddl": "CREATE TABLE users (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  email VARCHAR(255) UNIQUE NOT NULL,\n  password_hash VARCHAR(255) NOT NULL\n);\nCREATE TABLE events (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  name VARCHAR(255) NOT NULL,\n  capacity INT NOT NULL\n);\nCREATE TABLE seats (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  event_id INT NOT NULL,\n  seat_number VARCHAR(20) NOT NULL,\n  UNIQUE (event_id, seat_number),\n  FOREIGN KEY (event_id) REFERENCES events(id)\n);\nCREATE TABLE bookings (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  user_id INT NOT NULL,\n  event_id INT NOT NULL,\n  seat_id INT NOT NULL,\n  status ENUM('pending', 'confirmed', 'cancelled') DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  FOREIGN KEY (user_id) REFERENCES users(id),\n  FOREIGN KEY (event_id) REFERENCES events(id),\n  FOREIGN KEY (seat_id) REFERENCES seats(id),\n  UNIQUE (event_id, seat_id)\n);",
+    "indexes": [
+      {
+        "table": "bookings",
+        "columns": [
+          "user_id",
+          "created_at"
+        ],
+        "reason": "Speeds up user booking history queries sorted by recency."
+      },
+      {
+        "table": "bookings",
+        "columns": [
+          "seat_id"
+        ],
+        "reason": "Enforces fast lookup to prevent double-booking a seat."
+      }
+    ],
+    "transaction_strategy": "Use a database transaction with a unique constraint on (event_id, seat_id) to prevent double-booking. Apply row-level locking on the seat record during booking to ensure atomicity and prevent concurrent bookings. This strategy guarantees that no two bookings can claim the same seat simultaneously, even under high concurrency.",
+    "important_queries": [
+      {
+        "description": "Get a user's booking history",
+        "sql": "SELECT * FROM bookings WHERE user_id = ? ORDER BY created_at DESC;"
+      },
+      {
+        "description": "Check if a seat is already booked",
+        "sql": "SELECT * FROM bookings WHERE seat_id = ? AND status = 'confirmed';"
+      }
+    ],
+    "constraints": [
+      {
+        "type": "unique",
+        "table": "bookings",
+        "columns": [
+          "event_id",
+          "seat_id"
+        ],
+        "description": "Prevents the same seat from being booked twice for the same event."
+      },
+      {
+        "type": "foreign_key",
+        "table": "bookings",
+        "columns": [
+          "user_id"
+        ],
+        "description": "Every booking must belong to a real user."
+      },
+      {
+        "type": "foreign_key",
+        "table": "bookings",
+        "columns": [
+          "event_id"
+        ],
+        "description": "Every booking must belong to a valid event."
+      },
+      {
+        "type": "foreign_key",
+        "table": "bookings",
+        "columns": [
+          "seat_id"
+        ],
+        "description": "Every booking must reference a valid seat."
+      }
+    ],
+    "state_fields": [
+      "bookings.status: pending/confirmed/cancelled \u2014 tracks booking lifecycle"
+    ],
+    "audit_fields": [
+      "bookings.created_at: when the booking was made, for history and support queries"
+    ],
+    "validation": {
+      "final_valid": true,
+      "attempts": 1,
+      "log": [
+        {
+          "attempt": 1,
+          "result": {
+            "valid": true,
+            "statements_checked": 4,
+            "errors": [],
+            "note": "MySQL DDL auto-commits and cannot be rolled back; any leftover tables with these names were cleared before starting, and any tables created were explicitly dropped after validation."
+          }
+        }
+      ]
+    }
+  },
+  "review": {
+    "issues": [
+      {
+        "category": "architecture",
+        "severity": "warning",
+        "description": "",
+        "suggested_fix": ""
+      },
+      {
+        "category": "architecture",
+        "severity": "warning",
+        "description": "",
+        "suggested_fix": ""
+      },
+      {
+        "category": "architecture",
+        "severity": "warning",
+        "description": "",
+        "suggested_fix": ""
+      }
+    ],
+    "overall_assessment": "The system has critical issues with idempotency enforcement and transactional consistency that could lead to data corruption and inconsistent state. The UNIQUE constraint on (event_id, seat_id) is a good start for preventing double-booking, but it is insufficient without proper transactional guarantees and idempotency handling. The system must implement a database-level idempotency key constraint and ensure that transactions use a strict isolation level (e.g., REPEATABLE READ) to prevent concurrent bookings from succeeding. Without these, the system cannot guarantee the critical invariant of no double-booking under high concurrency."
+  },
+  "cycle_count": 0,
+  "er_diagram": "erDiagram\n    users {\n        int id PK\n        varchar email\n        varchar password_hash\n    }\n    events {\n        int id PK\n        varchar name\n        int capacity\n    }\n    seats {\n        int id PK\n        int event_id FK\n        varchar seat_number\n    }\n    bookings {\n        int id PK\n        int user_id FK\n        int event_id FK\n        int seat_id FK\n        enum status\n        timestamp created_at\n    }\n    events ||--o{ seats : \"event_id\"\n    users ||--o{ bookings : \"user_id\"\n    events ||--o{ bookings : \"event_id\"\n    seats ||--o{ bookings : \"seat_id\"",
+  "report": {
+    "application": "ticket_booking",
+    "sections": {
+      "1_requirements_scope": "**Application:** ticket_booking\n\n**Critical invariant:** No seat can be booked by more than one user at a time\n\n**Other invariants:** Seats must be unique within an event\n\n**Features:** Search events, Seat selection, Ticket booking\n\n**Transaction requirements:** Atomic seat booking (ensure seat is not double-booked)",
+      "2_scale": "**Expected scale:** unknown\n**Peak traffic:** unknown\n**Data growth:** unknown\n\n**Assumptions made (explicitly, not silently invented):**\n- expected_scale: unknown (not stated in the description)\n- peak_traffic: unknown (not stated in the description)\n- data_growth: unknown (not stated in the description)\n- availability_requirement: unstated (not stated in the description)\n- latency_requirement: unstated (not stated in the description)",
+      "3_features_roles": "- **User:** Searches for events, selects seats, and books tickets",
+      "4_read_vs_write": "**Workload:** mixed\n**Read/write ratio:** balanced\n\n**Read operations:** search events, search seats\n**Write operations:** create booking",
+      "5_concurrency": "**Concurrency level:** high\n\n**Enforcement strategy:** Use a database transaction with a unique constraint on (event_id, seat_id) to prevent double-booking. Apply row-level locking on the seat record during booking to ensure atomicity and prevent concurrent bookings. This strategy guarantees that no two bookings can claim the same seat simultaneously, even under high concurrency.\n\nSee Section 23 (Review Findings) for whether this enforcement was validated as sufficient.",
+      "6_entities": "- **User:** A registered user who can participate in ticket bookings.\n- **Event:** A specific event with a unique identifier and a list of available seats.\n- **Seat:** A physical or virtual seat within an event that can be booked.\n- **Booking:** A record of a user booking a specific seat for an event.",
+      "7_relationships_cardinality": "- User \u2192 Booking (one-to-many): A user can make multiple bookings across different events.\n- Event \u2192 Seat (one-to-many): An event contains multiple seats that can be booked.\n- Event \u2192 Booking (one-to-many): An event can have multiple bookings of its seats.\n- Seat \u2192 Booking (one-to-one): A seat can be booked by at most one user at a time.",
+      "8_schema": "**Constraints:**\n- unique on bookings(event_id, seat_id): Prevents the same seat from being booked twice for the same event.\n- foreign_key on bookings(user_id): Every booking must belong to a real user.\n- foreign_key on bookings(event_id): Every booking must belong to a valid event.\n- foreign_key on bookings(seat_id): Every booking must reference a valid seat.\n\n**Full DDL:**\n```sql\nCREATE TABLE users (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  email VARCHAR(255) UNIQUE NOT NULL,\n  password_hash VARCHAR(255) NOT NULL\n);\nCREATE TABLE events (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  name VARCHAR(255) NOT NULL,\n  capacity INT NOT NULL\n);\nCREATE TABLE seats (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  event_id INT NOT NULL,\n  seat_number VARCHAR(20) NOT NULL,\n  UNIQUE (event_id, seat_number),\n  FOREIGN KEY (event_id) REFERENCES events(id)\n);\nCREATE TABLE bookings (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  user_id INT NOT NULL,\n  event_id INT NOT NULL,\n  seat_id INT NOT NULL,\n  status ENUM('pending', 'confirmed', 'cancelled') DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  FOREIGN KEY (user_id) REFERENCES users(id),\n  FOREIGN KEY (event_id) REFERENCES events(id),\n  FOREIGN KEY (seat_id) REFERENCES seats(id),\n  UNIQUE (event_id, seat_id)\n);\n```",
+      "9_sql_vs_nosql": "**Primary database:** MySQL\n\n**Reasoning:** The requirement for strong consistency and atomic seat booking (preventing double-booking) aligns with MySQL's ACID compliance and ability to enforce unique (show_id, seat_id) constraints. The retrieved context shows that database-level constraints like this are the only reliable way to prevent concurrent booking races, which matches the ticket booking use case. MySQL also supports the relational model needed for transactional integrity across entities like User, Event, and Seat.\n\n**Alternatives considered:**\n- PostgreSQL: PostgreSQL also supports ACID transactions and unique constraints, but the retrieved context emphasizes MySQL's suitability for this workload due to its established use in transactional systems and the specific requirement for seat uniqueness. PostgreSQL's additional features like JSONB might not be necessary here.\n\n**Rejected:**\n- Redis: Redis is not suitable as the primary database for transactional state; it lacks ACID compliance and cannot enforce the unique (show_id, seat_id) constraint required for seat booking consistency.\n- MongoDB: MongoDB does not natively support the strong consistency and ACID transactions needed for atomic seat booking, and its document model would not reliably prevent double-booking without application-level checks that the retrieved context states are insufficient.",
+      "10_important_queries": "- **Get a user's booking history**\n  ```sql\n  SELECT * FROM bookings WHERE user_id = ? ORDER BY created_at DESC;\n  ```\n- **Check if a seat is already booked**\n  ```sql\n  SELECT * FROM bookings WHERE seat_id = ? AND status = 'confirmed';\n  ```",
+      "11_indexes": "- bookings(user_id, created_at): Speeds up user booking history queries sorted by recency.\n- bookings(seat_id): Enforces fast lookup to prevent double-booking a seat.",
+      "12_cache": "### Cache\n**Decision:** No caching layer\n**Reason:** The requirement's latency requirement is unstated and workload is mixed with balanced read/write ratio, so there is no demonstrated need for caching to reduce database load.\n**Evidence:** requirement field latency_requirement is 'unstated' and workload is 'mixed' with balanced read/write ratio\n**Alternative considered:** Add Redis for read-through caching of seat lookups\n**Why rejected:** No specific hot-read pattern or latency target was described that a cache would need to satisfy\n**Trade-off:** Without a cache, every read hits the primary database directly; simpler to operate but no headroom against read spikes\n",
+      "13_replication": "### Replication\n**Decision:** No read replicas\n**Reason:** The requirement's peak traffic is unknown and availability requirement is unstated, so there is no evidence of a read bottleneck that a single primary can't handle.\n**Evidence:** requirement field peak_traffic is 'unknown' and availability_requirement is 'unstated'\n**Alternative considered:** Add one read replica for reporting queries\n**Why rejected:** No reporting/analytics workload was described, so there is nothing for a replica to offload yet\n**Trade-off:** If read traffic grows unexpectedly, the single primary becomes a bottleneck sooner than it would with replicas in place\n",
+      "14_search": "### Search\n**Decision:** OpenSearch for full-text search\n**Reason:** The requirement explicitly states full-text search is needed, and OpenSearch is the dedicated search engine that provides full-text search, relevance ranking, and faceting capabilities without compromising transactional integrity.\n**Evidence:** requirement field full_text_search is 'required'\n**Alternative considered:** Use MySQL full-text indexes\n**Why rejected:** MySQL full-text indexes lack the advanced search capabilities like relevance ranking, fuzzy matching, and faceting required for this application\n**Trade-off:** OpenSearch adds complexity to the infrastructure but ensures search queries remain fast and relevant without affecting the transactional database's consistency\n",
+      "15_partitioning": "### Partitioning\n**Decision:** No partitioning\n**Reason:** The requirement's expected scale is unknown and data growth is unknown, so there is no evidence that partitioning would be necessary to manage data size or performance.\n**Evidence:** requirement field expected_scale is 'unknown' and data_growth is 'unknown'\n**Alternative considered:** Partition by event_id for better query performance\n**Why rejected:** No concrete data size or query patterns were described that would justify partitioning\n**Trade-off:** Without partitioning, the database remains simple to manage but may become slow as data grows beyond the single node's capacity\n",
+      "16_sharding": "### Sharding\n**Decision:** No sharding\n**Reason:** The requirement's expected scale is unknown and peak traffic is unknown, so there is no evidence that sharding would be necessary to handle high concurrency or data volume.\n**Evidence:** requirement field expected_scale is 'unknown' and peak_traffic is 'unknown'\n**Alternative considered:** Shard by user_id to distribute load\n**Why rejected:** No concrete user count or traffic patterns were described that would justify sharding\n**Trade-off:** Without sharding, the database remains simple to manage but may become a bottleneck as user traffic grows unexpectedly\n",
+      "17_pagination": "### Pagination\n**Decision:** Keyset (cursor-based) pagination for event/seat listing queries\n**Reason:** Offset pagination degrades on large tables as the offset grows, and the retrieved pagination guidance recommends keyset pagination to avoid deep-offset cost on large tables\n**Evidence:** retrieved design/pagination_deep.md recommends keyset pagination to avoid deep-offset cost on large tables\n**Alternative considered:** Simple offset/limit pagination\n**Why rejected:** Offset pagination has known performance degradation at scale and no strong reason (e.g. need for 'jump to page N') favors it here\n**Trade-off:** Cursor pagination cannot jump to an arbitrary page number, only step forward/backward\n",
+      "18_transactions": "**Strategy:** Use a database transaction with a unique constraint on (event_id, seat_id) to prevent double-booking. Apply row-level locking on the seat record during booking to ensure atomicity and prevent concurrent bookings. This strategy guarantees that no two bookings can claim the same seat simultaneously, even under high concurrency.",
+      "19_failure_handling": "### Failure Handling\n**Decision:** Daily automated backups with point-in-time recovery, no multi-region failover\n**Reason:** Availability requirement is unstated, giving no evidence of a need for the operational complexity of multi-region failover; but data loss from any single-node failure must still be bounded, which backups address regardless of availability target\n**Evidence:** requirement field availability_requirement is 'unstated' \u2014 this is about DATA DURABILITY/RECOVERY (backups, RPO/RTO), a separate concern from replication (which is about READ SCALING, already decided separately)\n**Alternative considered:** Multi-region active-passive failover\n**Why rejected:** No stated availability target (e.g. '99.9% uptime') justifies the operational cost of maintaining a failover region\n**Trade-off:** Recovery from a full node loss takes longer (restore-from-backup time) than an automatic failover would, in exchange for much lower operational complexity\n",
+      "20_idempotency": "### Idempotency\n**Decision:** Idempotency key required on booking-creation requests\n**Reason:** The critical invariant (no double booking) means a retried request must not create a second booking, so the write path needs a way to detect and safely ignore duplicates\n**Evidence:** requirement field idempotency_requirements combined with the critical_invariant about double booking\n**Alternative considered:** Rely on the UNIQUE constraint alone with no explicit idempotency key\n**Why rejected:** A UNIQUE constraint prevents a second seat claim, but a client retry could still surface a confusing duplicate-error rather than safely returning the original booking result\n**Trade-off:** Requires the client to generate and pass an idempotency key, adding a small amount of API surface complexity\n",
+      "21_consistency": "### Consistency\n**Decision:** Strong transactional consistency with unique (show_id, seat_id) constraint on show_seats table\n**Reason:** The requirement for atomic seat booking (no double-booking) and strong transactional consistency are best achieved through database-level constraints and transactions, as demonstrated in the ticket booking case study\n**Evidence:** case_studies/ticket_booking_full_design.md specifies unique (show_id, seat_id) constraint to ensure seat ownership\n**Alternative considered:** Eventual consistency with distributed locks or cache-based consistency\n**Why rejected:** Eventual consistency would risk duplicate bookings during high concurrency, which violates the critical invariant of seat ownership\n**Trade-off:** Strong consistency requires higher transaction latency and database write overhead compared to eventual consistency\n",
+      "22_final_architecture": "**Architecture summary:** MySQL + OpenSearch\n\n**Supporting components:**\n- OpenSearch (Full-text search for events and show details, required)\n\n**ER Diagram:**\n```mermaid\nerDiagram\n    users {\n        int id PK\n        varchar email\n        varchar password_hash\n    }\n    events {\n        int id PK\n        varchar name\n        int capacity\n    }\n    seats {\n        int id PK\n        int event_id FK\n        varchar seat_number\n    }\n    bookings {\n        int id PK\n        int user_id FK\n        int event_id FK\n        int seat_id FK\n        enum status\n        timestamp created_at\n    }\n    events ||--o{ seats : \"event_id\"\n    users ||--o{ bookings : \"user_id\"\n    events ||--o{ bookings : \"event_id\"\n    seats ||--o{ bookings : \"seat_id\"\n```",
+      "23_trade_offs_and_review": "**Trade-offs across all decisions:**\n- **caching:** Without a cache, every read hits the primary database directly; simpler to operate but no headroom against read spikes\n- **replication:** If read traffic grows unexpectedly, the single primary becomes a bottleneck sooner than it would with replicas in place\n- **search:** OpenSearch adds complexity to the infrastructure but ensures search queries remain fast and relevant without affecting the transactional database's consistency\n- **partitioning:** Without partitioning, the database remains simple to manage but may become slow as data grows beyond the single node's capacity\n- **sharding:** Without sharding, the database remains simple to manage but may become a bottleneck as user traffic grows unexpectedly\n- **pagination:** Cursor pagination cannot jump to an arbitrary page number, only step forward/backward\n- **failure_handling:** Recovery from a full node loss takes longer (restore-from-backup time) than an automatic failover would, in exchange for much lower operational complexity\n- **idempotency:** Requires the client to generate and pass an idempotency key, adding a small amount of API surface complexity\n- **consistency_strategy:** Strong consistency requires higher transaction latency and database write overhead compared to eventual consistency\n- **transactions:** strong consistency via database-level constraint enforcement trades write-time contention for correctness guarantees (see Section 18 for the specific strategy).\n\n**Review findings:**\n- **[WARNING/architecture]** \n  *Suggested fix:* \n- **[WARNING/architecture]** \n  *Suggested fix:* \n- **[WARNING/architecture]** \n  *Suggested fix:* \n\n**Overall assessment:** The system has critical issues with idempotency enforcement and transactional consistency that could lead to data corruption and inconsistent state. The UNIQUE constraint on (event_id, seat_id) is a good start for preventing double-booking, but it is insufficient without proper transactional guarantees and idempotency handling. The system must implement a database-level idempotency key constraint and ensure that transactions use a strict isolation level (e.g., REPEATABLE READ) to prevent concurrent bookings from succeeding. Without these, the system cannot guarantee the critical invariant of no double-booking under high concurrency."
+    },
+    "markdown": "## 1. Requirements Scope\n\n**Application:** ticket_booking\n\n**Critical invariant:** No seat can be booked by more than one user at a time\n\n**Other invariants:** Seats must be unique within an event\n\n**Features:** Search events, Seat selection, Ticket booking\n\n**Transaction requirements:** Atomic seat booking (ensure seat is not double-booked)\n\n---\n\n## 2. Scale\n\n**Expected scale:** unknown\n**Peak traffic:** unknown\n**Data growth:** unknown\n\n**Assumptions made (explicitly, not silently invented):**\n- expected_scale: unknown (not stated in the description)\n- peak_traffic: unknown (not stated in the description)\n- data_growth: unknown (not stated in the description)\n- availability_requirement: unstated (not stated in the description)\n- latency_requirement: unstated (not stated in the description)\n\n---\n\n## 3. Features Roles\n\n- **User:** Searches for events, selects seats, and books tickets\n\n---\n\n## 4. Read Vs Write\n\n**Workload:** mixed\n**Read/write ratio:** balanced\n\n**Read operations:** search events, search seats\n**Write operations:** create booking\n\n---\n\n## 5. Concurrency\n\n**Concurrency level:** high\n\n**Enforcement strategy:** Use a database transaction with a unique constraint on (event_id, seat_id) to prevent double-booking. Apply row-level locking on the seat record during booking to ensure atomicity and prevent concurrent bookings. This strategy guarantees that no two bookings can claim the same seat simultaneously, even under high concurrency.\n\nSee Section 23 (Review Findings) for whether this enforcement was validated as sufficient.\n\n---\n\n## 6. Entities\n\n- **User:** A registered user who can participate in ticket bookings.\n- **Event:** A specific event with a unique identifier and a list of available seats.\n- **Seat:** A physical or virtual seat within an event that can be booked.\n- **Booking:** A record of a user booking a specific seat for an event.\n\n---\n\n## 7. Relationships Cardinality\n\n- User \u2192 Booking (one-to-many): A user can make multiple bookings across different events.\n- Event \u2192 Seat (one-to-many): An event contains multiple seats that can be booked.\n- Event \u2192 Booking (one-to-many): An event can have multiple bookings of its seats.\n- Seat \u2192 Booking (one-to-one): A seat can be booked by at most one user at a time.\n\n---\n\n## 8. Schema\n\n**Constraints:**\n- unique on bookings(event_id, seat_id): Prevents the same seat from being booked twice for the same event.\n- foreign_key on bookings(user_id): Every booking must belong to a real user.\n- foreign_key on bookings(event_id): Every booking must belong to a valid event.\n- foreign_key on bookings(seat_id): Every booking must reference a valid seat.\n\n**Full DDL:**\n```sql\nCREATE TABLE users (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  email VARCHAR(255) UNIQUE NOT NULL,\n  password_hash VARCHAR(255) NOT NULL\n);\nCREATE TABLE events (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  name VARCHAR(255) NOT NULL,\n  capacity INT NOT NULL\n);\nCREATE TABLE seats (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  event_id INT NOT NULL,\n  seat_number VARCHAR(20) NOT NULL,\n  UNIQUE (event_id, seat_number),\n  FOREIGN KEY (event_id) REFERENCES events(id)\n);\nCREATE TABLE bookings (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  user_id INT NOT NULL,\n  event_id INT NOT NULL,\n  seat_id INT NOT NULL,\n  status ENUM('pending', 'confirmed', 'cancelled') DEFAULT 'pending',\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  FOREIGN KEY (user_id) REFERENCES users(id),\n  FOREIGN KEY (event_id) REFERENCES events(id),\n  FOREIGN KEY (seat_id) REFERENCES seats(id),\n  UNIQUE (event_id, seat_id)\n);\n```\n\n---\n\n## 9. Sql Vs Nosql\n\n**Primary database:** MySQL\n\n**Reasoning:** The requirement for strong consistency and atomic seat booking (preventing double-booking) aligns with MySQL's ACID compliance and ability to enforce unique (show_id, seat_id) constraints. The retrieved context shows that database-level constraints like this are the only reliable way to prevent concurrent booking races, which matches the ticket booking use case. MySQL also supports the relational model needed for transactional integrity across entities like User, Event, and Seat.\n\n**Alternatives considered:**\n- PostgreSQL: PostgreSQL also supports ACID transactions and unique constraints, but the retrieved context emphasizes MySQL's suitability for this workload due to its established use in transactional systems and the specific requirement for seat uniqueness. PostgreSQL's additional features like JSONB might not be necessary here.\n\n**Rejected:**\n- Redis: Redis is not suitable as the primary database for transactional state; it lacks ACID compliance and cannot enforce the unique (show_id, seat_id) constraint required for seat booking consistency.\n- MongoDB: MongoDB does not natively support the strong consistency and ACID transactions needed for atomic seat booking, and its document model would not reliably prevent double-booking without application-level checks that the retrieved context states are insufficient.\n\n---\n\n## 10. Important Queries\n\n- **Get a user's booking history**\n  ```sql\n  SELECT * FROM bookings WHERE user_id = ? ORDER BY created_at DESC;\n  ```\n- **Check if a seat is already booked**\n  ```sql\n  SELECT * FROM bookings WHERE seat_id = ? AND status = 'confirmed';\n  ```\n\n---\n\n## 11. Indexes\n\n- bookings(user_id, created_at): Speeds up user booking history queries sorted by recency.\n- bookings(seat_id): Enforces fast lookup to prevent double-booking a seat.\n\n---\n\n## 12. Cache\n\n### Cache\n**Decision:** No caching layer\n**Reason:** The requirement's latency requirement is unstated and workload is mixed with balanced read/write ratio, so there is no demonstrated need for caching to reduce database load.\n**Evidence:** requirement field latency_requirement is 'unstated' and workload is 'mixed' with balanced read/write ratio\n**Alternative considered:** Add Redis for read-through caching of seat lookups\n**Why rejected:** No specific hot-read pattern or latency target was described that a cache would need to satisfy\n**Trade-off:** Without a cache, every read hits the primary database directly; simpler to operate but no headroom against read spikes\n\n\n---\n\n## 13. Replication\n\n### Replication\n**Decision:** No read replicas\n**Reason:** The requirement's peak traffic is unknown and availability requirement is unstated, so there is no evidence of a read bottleneck that a single primary can't handle.\n**Evidence:** requirement field peak_traffic is 'unknown' and availability_requirement is 'unstated'\n**Alternative considered:** Add one read replica for reporting queries\n**Why rejected:** No reporting/analytics workload was described, so there is nothing for a replica to offload yet\n**Trade-off:** If read traffic grows unexpectedly, the single primary becomes a bottleneck sooner than it would with replicas in place\n\n\n---\n\n## 14. Search\n\n### Search\n**Decision:** OpenSearch for full-text search\n**Reason:** The requirement explicitly states full-text search is needed, and OpenSearch is the dedicated search engine that provides full-text search, relevance ranking, and faceting capabilities without compromising transactional integrity.\n**Evidence:** requirement field full_text_search is 'required'\n**Alternative considered:** Use MySQL full-text indexes\n**Why rejected:** MySQL full-text indexes lack the advanced search capabilities like relevance ranking, fuzzy matching, and faceting required for this application\n**Trade-off:** OpenSearch adds complexity to the infrastructure but ensures search queries remain fast and relevant without affecting the transactional database's consistency\n\n\n---\n\n## 15. Partitioning\n\n### Partitioning\n**Decision:** No partitioning\n**Reason:** The requirement's expected scale is unknown and data growth is unknown, so there is no evidence that partitioning would be necessary to manage data size or performance.\n**Evidence:** requirement field expected_scale is 'unknown' and data_growth is 'unknown'\n**Alternative considered:** Partition by event_id for better query performance\n**Why rejected:** No concrete data size or query patterns were described that would justify partitioning\n**Trade-off:** Without partitioning, the database remains simple to manage but may become slow as data grows beyond the single node's capacity\n\n\n---\n\n## 16. Sharding\n\n### Sharding\n**Decision:** No sharding\n**Reason:** The requirement's expected scale is unknown and peak traffic is unknown, so there is no evidence that sharding would be necessary to handle high concurrency or data volume.\n**Evidence:** requirement field expected_scale is 'unknown' and peak_traffic is 'unknown'\n**Alternative considered:** Shard by user_id to distribute load\n**Why rejected:** No concrete user count or traffic patterns were described that would justify sharding\n**Trade-off:** Without sharding, the database remains simple to manage but may become a bottleneck as user traffic grows unexpectedly\n\n\n---\n\n## 17. Pagination\n\n### Pagination\n**Decision:** Keyset (cursor-based) pagination for event/seat listing queries\n**Reason:** Offset pagination degrades on large tables as the offset grows, and the retrieved pagination guidance recommends keyset pagination to avoid deep-offset cost on large tables\n**Evidence:** retrieved design/pagination_deep.md recommends keyset pagination to avoid deep-offset cost on large tables\n**Alternative considered:** Simple offset/limit pagination\n**Why rejected:** Offset pagination has known performance degradation at scale and no strong reason (e.g. need for 'jump to page N') favors it here\n**Trade-off:** Cursor pagination cannot jump to an arbitrary page number, only step forward/backward\n\n\n---\n\n## 18. Transactions\n\n**Strategy:** Use a database transaction with a unique constraint on (event_id, seat_id) to prevent double-booking. Apply row-level locking on the seat record during booking to ensure atomicity and prevent concurrent bookings. This strategy guarantees that no two bookings can claim the same seat simultaneously, even under high concurrency.\n\n---\n\n## 19. Failure Handling\n\n### Failure Handling\n**Decision:** Daily automated backups with point-in-time recovery, no multi-region failover\n**Reason:** Availability requirement is unstated, giving no evidence of a need for the operational complexity of multi-region failover; but data loss from any single-node failure must still be bounded, which backups address regardless of availability target\n**Evidence:** requirement field availability_requirement is 'unstated' \u2014 this is about DATA DURABILITY/RECOVERY (backups, RPO/RTO), a separate concern from replication (which is about READ SCALING, already decided separately)\n**Alternative considered:** Multi-region active-passive failover\n**Why rejected:** No stated availability target (e.g. '99.9% uptime') justifies the operational cost of maintaining a failover region\n**Trade-off:** Recovery from a full node loss takes longer (restore-from-backup time) than an automatic failover would, in exchange for much lower operational complexity\n\n\n---\n\n## 20. Idempotency\n\n### Idempotency\n**Decision:** Idempotency key required on booking-creation requests\n**Reason:** The critical invariant (no double booking) means a retried request must not create a second booking, so the write path needs a way to detect and safely ignore duplicates\n**Evidence:** requirement field idempotency_requirements combined with the critical_invariant about double booking\n**Alternative considered:** Rely on the UNIQUE constraint alone with no explicit idempotency key\n**Why rejected:** A UNIQUE constraint prevents a second seat claim, but a client retry could still surface a confusing duplicate-error rather than safely returning the original booking result\n**Trade-off:** Requires the client to generate and pass an idempotency key, adding a small amount of API surface complexity\n\n\n---\n\n## 21. Consistency\n\n### Consistency\n**Decision:** Strong transactional consistency with unique (show_id, seat_id) constraint on show_seats table\n**Reason:** The requirement for atomic seat booking (no double-booking) and strong transactional consistency are best achieved through database-level constraints and transactions, as demonstrated in the ticket booking case study\n**Evidence:** case_studies/ticket_booking_full_design.md specifies unique (show_id, seat_id) constraint to ensure seat ownership\n**Alternative considered:** Eventual consistency with distributed locks or cache-based consistency\n**Why rejected:** Eventual consistency would risk duplicate bookings during high concurrency, which violates the critical invariant of seat ownership\n**Trade-off:** Strong consistency requires higher transaction latency and database write overhead compared to eventual consistency\n\n\n---\n\n## 22. Final Architecture\n\n**Architecture summary:** MySQL + OpenSearch\n\n**Supporting components:**\n- OpenSearch (Full-text search for events and show details, required)\n\n**ER Diagram:**\n```mermaid\nerDiagram\n    users {\n        int id PK\n        varchar email\n        varchar password_hash\n    }\n    events {\n        int id PK\n        varchar name\n        int capacity\n    }\n    seats {\n        int id PK\n        int event_id FK\n        varchar seat_number\n    }\n    bookings {\n        int id PK\n        int user_id FK\n        int event_id FK\n        int seat_id FK\n        enum status\n        timestamp created_at\n    }\n    events ||--o{ seats : \"event_id\"\n    users ||--o{ bookings : \"user_id\"\n    events ||--o{ bookings : \"event_id\"\n    seats ||--o{ bookings : \"seat_id\"\n```\n\n---\n\n## 23. Trade Offs And Review\n\n**Trade-offs across all decisions:**\n- **caching:** Without a cache, every read hits the primary database directly; simpler to operate but no headroom against read spikes\n- **replication:** If read traffic grows unexpectedly, the single primary becomes a bottleneck sooner than it would with replicas in place\n- **search:** OpenSearch adds complexity to the infrastructure but ensures search queries remain fast and relevant without affecting the transactional database's consistency\n- **partitioning:** Without partitioning, the database remains simple to manage but may become slow as data grows beyond the single node's capacity\n- **sharding:** Without sharding, the database remains simple to manage but may become a bottleneck as user traffic grows unexpectedly\n- **pagination:** Cursor pagination cannot jump to an arbitrary page number, only step forward/backward\n- **failure_handling:** Recovery from a full node loss takes longer (restore-from-backup time) than an automatic failover would, in exchange for much lower operational complexity\n- **idempotency:** Requires the client to generate and pass an idempotency key, adding a small amount of API surface complexity\n- **consistency_strategy:** Strong consistency requires higher transaction latency and database write overhead compared to eventual consistency\n- **transactions:** strong consistency via database-level constraint enforcement trades write-time contention for correctness guarantees (see Section 18 for the specific strategy).\n\n**Review findings:**\n- **[WARNING/architecture]** \n  *Suggested fix:* \n- **[WARNING/architecture]** \n  *Suggested fix:* \n- **[WARNING/architecture]** \n  *Suggested fix:* \n\n**Overall assessment:** The system has critical issues with idempotency enforcement and transactional consistency that could lead to data corruption and inconsistent state. The UNIQUE constraint on (event_id, seat_id) is a good start for preventing double-booking, but it is insufficient without proper transactional guarantees and idempotency handling. The system must implement a database-level idempotency key constraint and ensure that transactions use a strict isolation level (e.g., REPEATABLE READ) to prevent concurrent bookings from succeeding. Without these, the system cannot guarantee the critical invariant of no double-booking under high concurrency.",
+    "unresolved_critical_issues": 0
+  }
+}
